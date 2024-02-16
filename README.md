@@ -1,93 +1,88 @@
-# ddb-milestones
+# Devil's DataBase (`ddb`)
 
+We assume you are in your course container shell. If you have a different setup, your mileage may vary: at the very least you will need `make` and Python (>= 3.11) with `poetry`.
 
+## Getting Started
 
-## Getting started
+1. One (and only one) team member should fork this repo by clicking the small 'Fork' button at the very top right on GitLab.
+   It's important that you fork first, because if you clone this repo directly you won't be able to push changes (save your progress) back to this repo (which is owned by the teaching staff).
+   Name your forked repo as you prefer.
+   In your newly forked repo, find the blue "Clone" button.
+   Copy the "Clone with SSH" text.
+   Add your teammates as members of your project as "Maintainers."
+   Share the copied text with your teammates so they have access to this repo too.
+   The remaining steps should be carried out by all team members.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+2. In your container shell, issue the command git clone THE_TEXT_YOU_JUST_COPIED (make sure to replace THE_TEXT_YOU_JUST_COPIED with the "Clone with SSH" text).
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+3. In your container shell, change into the repository directory and then run `./install.sh`.
+   This will mostly set up a `poetry` environment for you and install some dependencies.
 
-## Add your files
+## Running
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+* Before running, prepare the Python environment by running `poetry shell`.
+  While inside the correct environment, you should see `(ddb-py3.11)` at the beginning of your command-line prompt.
 
-```
-cd existing_repo
-git remote add origin https://gitlab.oit.duke.edu/compsci516/ddb-milestones.git
-git branch -M main
-git push -uf origin main
-```
+* To run the `ddb` interpreter, issue the command `python -m ddb.db`.
+  You know you are inside the `ddb` interpreter if you see the (blue) prompt `ddb> `.
+  Besides standard SQL (we only support a small fragment, notably without subqueries), here are some useful commands:
+  - `show tables;`
+  - `set debug on;` (or `off`)
+  - `set autocommit on;` (or `off`):
+    The default is `off`, which commits every statement/command.
+    But with this option on, you will be able to modify your database, play around with it,
+    and `rollback;` to undo all the changes.
+  - `analyze;`:
+    Collect statistics on your tables and indexes.
+  - <kbd>Ctrl</kbd>+<kbd>D</kbd>:
+    Exit the `ddb` interpreter.
 
-## Integrate with your tools
+* Use `python -m ddb.db --help` to see various options for running `ddb`.
+  In particular, the following is useful for running all statements in a `.sql` file as if they were typed in line by line:
+  ```
+  python -m ddb.db -i alps.sql
+  ```
 
-- [ ] [Set up project integrations](https://gitlab.oit.duke.edu/compsci516/ddb-milestones/-/settings/integrations)
+* `ddb` needs one directory to store data (defaults to `alps.db/`) and one as temp scratch space (defaults to `alps-tmp.ddb/`).
+  To drop the database so you can start from a clean slate, simply remove these directories (in your container shell):
+  ```
+  \rm -rf alps.db/ alps-tmp.db/
+  ```
 
-## Collaborate with your team
+## Developing and Debugging
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+* The source code uses Python compile-time type checking (`mypy` and `typing`) heavily.
+  We highly recommend learning how to use Python type annotations --- you will be thankful how many bugs it can help you avoid.
+  Whenever you have made non-trivial changes to code, use the command `make check` in your container shell to run the type checker.
 
-## Test and Deploy
+* To run the unit test in `tests/`, use `make test` in your container shell.
 
-Use the built-in continuous integration in GitLab.
+* We generate documentation automatically from the source code.
+  Run `make doc`, and then you will find the HTML documentation under `docs/build/html/index.html`,
+  which you can then open and view using your web browser.
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+* For debugging, besides `print()`, we highly recommend using the VSCode + container setup
+  (see Help section of the course website for details).
+  Make sure the correct Python interpreter (the one in `.venv/` set up by `poetry`) is picked up by VSCode.
+  The file `.vscode/launch.json` code repository sets up a debugging profile,
+  which you can use to launch the VSCode debugger.
+  The debugger allows you to set breakpoints, examine object contents, explore the call stack, etc.
 
-***
+## Directory Structure
 
-# Editing this README
+* `src/`: Python source code for `ddb`.
+   You will work mostly with files therein.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+* `tests/`: Unit tests.
+  We use `pytest` as the testing framework.
 
-## Suggestions for a good README
+* `docs/`: Documentation.
+  We use Sphinx to automatically generate documentation pages from comments in code.
+  - `source/conf.py`: In case you want to tweak Sphinx behavior.
+  - `build/html/index.html`: Home page of the automatically generated HTML documentation.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+* `alps.ddb/` and `alps-tmp.ddb/`: Default database/tmp storage areas, respectively.
+  The tmp directory will be cleared every time upon startup;
+  the database directory will be preserved.
 
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+* `alps.sql`: Some statements for testing.
