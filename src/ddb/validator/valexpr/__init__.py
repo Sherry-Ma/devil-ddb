@@ -8,4 +8,4 @@ from .binary import BinaryOpValExpr, CompareOpValExpr
 from .util import cast_if_needed, conjunctive_parts, make_conjunction, in_scope, find_column_refs,\
     reverse_comparison, is_column_comparing_to_literal, are_columns_joining,\
     push_down_conds, find_column_in_exprs, must_be_equivalent,\
-    OutputLineage, find_column_in_lineage, relativize, to_code_str, eval_literal
+    OutputLineage, find_column_in_lineage, relativize, is_computable_from, to_code_str, eval_literal

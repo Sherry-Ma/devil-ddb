@@ -209,7 +209,7 @@ def is_computable_from(e: ValExpr, exprs: list[ValExpr | None]) -> bool:
     """Check if ``e`` can be computed from ``exprs``.
     TODO: aggregate functions calls.
     """
-    return relativize(e, [[set()]*len(exprs)], [exprs]) is None
+    return relativize(e, [[set()]*len(exprs)], [exprs]) is not None
 
 def to_code_str(expr: ValExpr, output_lineages: list[OutputLineage], row_vars: list[str]) -> str:
     """Convert ``expr`` to a Python expression for evaluation inside a :class:`.QPop`.

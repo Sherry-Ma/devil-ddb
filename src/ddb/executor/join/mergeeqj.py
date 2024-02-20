@@ -1,4 +1,4 @@
-from typing import Final, Iterable, Generator, Any
+from typing import cast, Final, Iterable, Generator, Any
 from contextlib import closing
 from dataclasses import dataclass
 from functools import cached_property
@@ -187,9 +187,9 @@ class MergeEqJoinPop(JoinPop['MergeEqJoinPop.CompiledProps']):
     @cached_property
     def estimated(self) -> QPop.EstimatedProps:
         relativized_equalities = [
-            valexpr.relativize(
+            cast(ValExpr, valexpr.relativize(
                 valexpr.binary.EQ(e1, e2),
-                [self.left.compiled.output_lineage, self.right.compiled.output_lineage])
+                [self.left.compiled.output_lineage, self.right.compiled.output_lineage]))
             for e1, e2 in zip(self.left_exprs, self.right_exprs)
         ]
         stats = self.context.zm.join_stats(
@@ -212,13 +212,16 @@ class MergeEqJoinPop(JoinPop['MergeEqJoinPop.CompiledProps']):
                 overall = self.left.estimated.blocks.overall + self.right.estimated.blocks.overall + 2*extra_ios))
 
     def mini_bnlcj_execute(self, writer0: BufferedWriter, writer1: BufferedWriter) -> Generator[tuple, None, None]:
-        source0 = [writer0.buffer] if writer0.num_blocks_flushed == 0\
-            else BufferedReader(1).iter_buffer(writer0.file.iter_scan())
-        source1 = [writer1.buffer] if writer1.num_blocks_flushed == 0\
-            else BufferedReader(1).iter_buffer(writer1.file.iter_scan())
+        def source(i):
+            if i == 0:
+                return [writer0.buffer] if writer0.num_blocks_flushed == 0\
+                    else BufferedReader(1).iter_buffer(writer0.file.iter_scan())
+            else:
+                return [writer1.buffer] if writer1.num_blocks_flushed == 0\
+                    else BufferedReader(1).iter_buffer(writer1.file.iter_scan())
         reverse = writer0.num_blocks_flushed > writer1.num_blocks_flushed
-        for outer_buffer in (source1 if reverse else source0):
-            for inner_buffer in (source0 if reverse else source1):
+        for outer_buffer in (source(1) if reverse else source(0)):
+            for inner_buffer in (source(0) if reverse else source(1)):
                 for outer_row in outer_buffer:
                     for inner_row in inner_buffer:
                         if reverse:
@@ -252,8 +255,8 @@ class MergeEqJoinPop(JoinPop['MergeEqJoinPop.CompiledProps']):
     @profile_generator()
     def execute(self) -> Generator[tuple, None, None]:
         cmp_exec = self.compiled.cmp_exec
-        with self.context.sm.heap_file(self.context.tx, f'.tmp-{hex(id(self))}-left', [], create_if_not_exists=True) as file0, \
-            self.context.sm.heap_file(self.context.tx, f'.tmp-{hex(id(self))}-right', [], create_if_not_exists=True) as file1:
+        with self.context.sm.heap_file(self.context.tmp_tx, f'.tmp-{hex(id(self))}-left', [], create_if_not_exists=True) as file0, \
+            self.context.sm.heap_file(self.context.tmp_tx, f'.tmp-{hex(id(self))}-right', [], create_if_not_exists=True) as file1:
             # because we want more explict control over input generators, use the with-closing pattern instead of for below:
             with closing(self.left.execute()) as iter0, closing(self.right.execute()) as iter1:
                 row0 = next(iter0, None)

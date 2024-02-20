@@ -136,6 +136,7 @@ class LMDBHeapFile(HeapFile):
         if num_entries > 0:
             # quickest way to truncate is to drop and recreate:
             self.lmdb_tx.drop(self.lmdb_handle, delete=True)
+            self._close()
             self._open(create_if_not_exists=True)
         return num_entries
 
