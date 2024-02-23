@@ -13,10 +13,10 @@ run:	clean
 debug:	clean
 	python -m ddb.db --debug
 
-test:
+test:	clean
 	pytest
 
-test-debug:
+test-debug:	clean
 	pytest -s --log-cli-level=DEBUG
 
 doc:
