@@ -6,6 +6,7 @@ from ..validator import valexpr, ValExpr, SFWGHLop, BaseTableLop
 from ..executor import StatementContext, QPop, TableScanPop, BNLJoinPop, FilterPop, ProjectPop, IndexScanPop, IndexNLJoinPop, MergeEqJoinPop, MergeSortPop, HashEqJoinPop
 
 from .interface import Planner, PlannerException
+from .util import add_groupby_by_sorting, add_having_and_select
 
 class BaselinePlanner(Planner):
     @classmethod
@@ -355,5 +356,11 @@ class BaselinePlanner(Planner):
             raise PlannerException('unexpected error')
         if cond is not None:
             plan = FilterPop(plan, cond)
-        plan = ProjectPop(plan, block.select_valexprs, block.select_aliases)
+        if block.groupby_valexprs is not None:
+            plan, groupby_indcies = add_groupby_by_sorting(plan, block.groupby_valexprs)
+            plan = add_having_and_select(
+                plan, block.groupby_valexprs, groupby_indcies,
+                block.having_cond, block.select_valexprs, block.select_aliases)
+        else:
+            plan = ProjectPop(plan, block.select_valexprs, block.select_aliases)
         return plan

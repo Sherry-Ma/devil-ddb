@@ -207,16 +207,50 @@ class NaiveStatsManager(StatsManager[NaiveTableStats, NaiveCollectionStats]):
                 distinct_count = 1
                 for column_ref in valexpr.find_column_refs(e):
                     if isinstance(column_ref, valexpr.leaf.RelativeColumnRef):
-                        distinct_count = distinct_count * stats.distinct_counts[column_ref.column_index]
-            new_stats.column_sizes.append(column_size)
+                        distinct_count *= stats.distinct_counts[column_ref.column_index]
             new_stats.distinct_counts.append(min(distinct_count, stats.row_count))
+            new_stats.column_sizes.append(column_size)
         new_stats.row_size = sum(new_stats.column_sizes)
         return new_stats
 
-    def grouping_stats(self, stats: NaiveTableStats, grouping_exprs: list[ValExpr]) -> NaiveTableStats:
-        # TODO: estimate # dstinct for each grouping expr.
-        # output # is product of all distinct for grouping, but cap it to input size.
-        raise NotImplementedError
+    def grouping_stats(self, stats: NaiveTableStats,
+                       grouping_exprs: list[ValExpr],
+                       aggr_exprs: list[valexpr.AggrValExpr]) -> NaiveTableStats:
+        new_stats = NaiveTableStats(
+            row_count = stats.row_count,
+            row_size = 0,
+            column_sizes = list(),
+            tree_height = None,
+            fill_factor = None,
+            distinct_counts = list()
+        )
+        product_of_distinct_counts = 1
+        for e in grouping_exprs:
+            column_size: int
+            distinct_count: int
+            if isinstance(e, valexpr.leaf.RelativeColumnRef):
+                column_size = stats.column_sizes[e.column_index]
+                distinct_count = stats.distinct_counts[e.column_index]
+            elif valexpr.in_scope(e, []):
+                column_size = getsizeof(valexpr.eval_literal(e))
+                distinct_count = 1
+            else:
+                column_size = e.valtype().size
+                distinct_count = 1
+                for column_ref in valexpr.find_column_refs(e):
+                    if isinstance(column_ref, valexpr.leaf.RelativeColumnRef):
+                        distinct_count *= stats.distinct_counts[column_ref.column_index]
+            distinct_count = min(distinct_count, stats.row_count)
+            new_stats.distinct_counts.append(distinct_count)
+            product_of_distinct_counts *= distinct_count
+            new_stats.column_sizes.append(column_size)
+        new_stats.row_count = min(product_of_distinct_counts, stats.row_count)
+        for e in aggr_exprs:
+            column_size = e.valtype().size
+            new_stats.column_sizes.append(column_size)
+            new_stats.distinct_counts.append(new_stats.row_count)
+        new_stats.row_size = sum(new_stats.column_sizes)
+        return new_stats
 
     def join_stats(self, left_stats: NaiveTableStats, right_stats: NaiveTableStats, cond: ValExpr | None) -> NaiveTableStats:
         new_stats = NaiveTableStats(

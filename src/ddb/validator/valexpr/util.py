@@ -1,11 +1,11 @@
 """This module is the go-to place for useful functions for manipulating expressions
 that return atomic values (as opposed to collections).
 """
-from typing import cast, Final, TypeAlias, Type, Iterable, Iterator, Any
+from typing import cast, Final, TypeAlias, Type, Sequence, Iterable, Iterator, Any
 
 from ...types import ValType
 from .interface import ValExpr, ValidatorException
-from . import leaf, func, binary
+from . import leaf, func, binary, aggr
 from .eval import *
 
 def cast_if_needed(e: ValExpr, desired_type: ValType) -> ValExpr:
@@ -63,6 +63,40 @@ def find_column_refs(e: ValExpr) -> Iterator['leaf.NamedColumnRef|leaf.RelativeC
     else:
         for child in e.children():
             yield from find_column_refs(child)
+    return
+
+def contains_aggrs(e: ValExpr) -> bool:
+    """Check whether the given expression contains any aggregation.
+    """
+    if isinstance(e, aggr.AggrValExpr):
+        return True
+    else:
+        for child in e.children():
+            if contains_aggrs(child):
+                return True
+    return False
+    
+def find_aggrs(e: ValExpr) -> Iterator[aggr.AggrValExpr]:
+    """Enumerate all aggregate expressions inside the given expression.
+    """
+    if isinstance(e, aggr.AggrValExpr):
+        yield e
+    else:
+        for child in e.children():
+            yield from find_aggrs(child)
+    return
+
+def find_non_aggrs(e: ValExpr) -> Iterator[ValExpr]:
+    """Enumerate all maximal aggregate-free expressions inside the given expression.
+    By maximal, we mean that there is no other aggregate-free expressions inside the given expression containing it.
+    """
+    if isinstance(e, aggr.AggrValExpr):
+        yield from ()
+    elif all(not contains_aggrs(c) for c in e.children()):
+        yield e
+    else:
+        for c in e.children():
+            yield from find_non_aggrs(c)
     return
 
 reverse_comparison: Final[dict[Type[binary.CompareOpValExpr], Type[binary.CompareOpValExpr]]] = {
@@ -160,6 +194,8 @@ def must_be_equivalent(e1: ValExpr, e2: ValExpr) -> bool:
         return False
     if len(e1.children()) != len(e2.children()):
         return False
+    if isinstance(e1, aggr.AggrValExpr) and isinstance(e2, aggr.AggrValExpr) and e1.is_distinct != e2.is_distinct:
+        return False
     for c1, c2 in zip(e1.children(), e2.children()):
         if not must_be_equivalent(c1, c2):
             return False
@@ -179,37 +215,51 @@ def find_column_in_lineage(table_alias: str, column_name: str, output_lineage: O
             return i
     return None
 
-def relativize(e: ValExpr, output_lineages: list[OutputLineage], expr_lists: list[list[ValExpr|None] | None] | None = None) -> ValExpr:
+def relativize(e: ValExpr,
+               output_lineages: list[OutputLineage],
+               expr_lists: list[Sequence[ValExpr|None] | None] | None = None,
+               unsafe_outside_aggr: list[list[bool]] | None = None) -> ValExpr | None:
     """Express ``e`` in terms of :class:`.RelativeColumnRef` against a list of input rows.
     Return the new expression, or ``None`` if ``e`` cannot be fully relativized.
     For each input, there is an output lineage object in ``output_lineages``
     specifying what named column references can be made for each column;
     there is also a list in ``expr_lists`` (if given) specifying the expression (possilby none) computing each column.
-    TODO: aggregate functions calls.
+    ``unsafe_outside_aggr``, if not ``None``, will be consulted to determine whether
+    it is unsafe to express an expression outside of aggregation function using the corresponding columns.
+    TODO: This function currently detects if a subexpression of ``e`` is equivalent to one in ``expr_lists``,
+    but it does not recognize computability through rewrite, e.g., ``C+2`` can be computed from ``C-1`` as ``(C-1)+3``.
     """
     if isinstance(e, leaf.NamedColumnRef):
         for input_index, output_lineage in enumerate(output_lineages):
             if (column_index := find_column_in_lineage(e.table_alias, e.column_name, output_lineage)) is not None:
-                return leaf.RelativeColumnRef(input_index, column_index, e.valtype())
+                if unsafe_outside_aggr is None or not unsafe_outside_aggr[input_index][column_index]:
+                    return leaf.RelativeColumnRef(input_index, column_index, e.valtype())
     if expr_lists is not None:
         for input_index, expr_list in enumerate(expr_lists):
             if expr_list is None: continue
             for column_index, expr in enumerate(expr_list):
                 if expr is None: continue
                 if must_be_equivalent(e, expr):
-                    return leaf.RelativeColumnRef(input_index, column_index, e.valtype())
-    relativized_children = list()
-    for child in e.children():
-        if (relativized_child := relativize(child, output_lineages, expr_lists)) is None:
-            return None
-        relativized_children.append(relativized_child)
-    return e.copy_with_new_children(tuple(relativized_children))
+                    if unsafe_outside_aggr is None or not unsafe_outside_aggr[input_index][column_index]:
+                        return leaf.RelativeColumnRef(input_index, column_index, e.valtype())
+    if isinstance(e, leaf.NamedColumnRef):
+        # if there is still no match at this point for a named column reference, there is no relativization:
+        return None
+    else:
+        relativized_children = list()
+        for child in e.children():
+            if (relativized_child := relativize(
+                    child, output_lineages, expr_lists,
+                    None if isinstance(e, aggr.AggrValExpr) else unsafe_outside_aggr)) is None:
+                return None
+            relativized_children.append(relativized_child)
+        return e.copy_with_new_children(tuple(relativized_children))
 
-def is_computable_from(e: ValExpr, exprs: list[ValExpr | None]) -> bool:
+def is_computable_from(e: ValExpr, exprs: list[ValExpr]) -> bool:
     """Check if ``e`` can be computed from ``exprs``.
-    TODO: aggregate functions calls.
+    This function assumes (and does not verify) that these expressions are aggregree-free.
     """
-    return relativize(e, [[set()]*len(exprs)], [exprs]) is not None
+    return relativize(e, [[set()]*len(exprs)], [exprs], None) is not None
 
 def to_code_str(expr: ValExpr, output_lineages: list[OutputLineage], row_vars: list[str]) -> str:
     """Convert ``expr`` to a Python expression for evaluation inside a :class:`.QPop`.

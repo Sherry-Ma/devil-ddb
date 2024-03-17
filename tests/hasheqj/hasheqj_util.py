@@ -133,8 +133,6 @@ def random_test(test_id, l_size, r_size, max_fanout, random_seed=None):
 
 
 if __name__ == "__main__":
-    # test_id, (#row0, #col0), (#row1, #col1), max_fanout, random_seed
-    # make sure that #row0 >= row1 and #col0 + #col1 <= 26
     random_test(0, (8, 3), (6, 2), 2, 0)
     random_test(1, (20, 3), (15, 4), 5, 1)
     random_test(2, (100, 4), (88, 2), 40, 2)

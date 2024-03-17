@@ -13,7 +13,8 @@ from ..parser import parse
 
 from .interface import ValidatorException, Lop, QLop
 from .lops import BaseTableLop, SFWGHLop, InsertLop, DeleteLop, CreateTableLop, ShowTablesLop, AnalyzeStatsLop, CreateIndexLop, LiteralTableLop, SetOptionLop, CommitLop, RollbackLop
-from .valexpr import ValExpr, LiteralNumber, LiteralString, LiteralBoolean, NamedColumnRef, binary, unary, func, eval_literal
+from .valexpr import ValExpr, LiteralNumber, LiteralString, LiteralBoolean, NamedColumnRef, binary, unary, func, aggr
+from .valexpr import eval_literal, contains_aggrs, find_non_aggrs, is_computable_from
 
 def validate(mm: MetadataManager, tx: Transaction, parse_tree: exp.Expression) -> Lop:
     # normalize table/column names first:
@@ -150,6 +151,10 @@ def normalize_select_by_schema(parse_tree: exp.Select, metadata: dict[str, BaseT
         t = qualify(parse_tree, schema={ k: v.columns_as_ordered_dict() for k, v in metadata.items() },
                     expand_alias_refs=True, qualify_columns=True, validate_qualify_columns=True,
                     quote_identifiers=True, identify=True)
+        # double-check, since the sqlglot seems to be silently missing some cases:
+        for c in t.find_all(exp.Column):
+            if 'table' not in c.args:
+                raise ValidatorException(f'unable to find the table for column {c.sql()}')
         return cast(exp.Select, t)
     except OptimizeError as e:
         raise ValidatorException('validation error') from e
@@ -184,9 +189,33 @@ def validate_select(mm: MetadataManager, tx: Transaction, parse_tree: exp.Select
     if 'where' in parse_tree.args:
         where_cond = validate_valexpr(parse_tree.args['where'].this, from_tables, from_aliases)
         if where_cond.valtype() != ValType.BOOLEAN:
-            raise ValidatorException('WHERE expression is not BOOLEAN')
+            raise ValidatorException('WHERE condition is not BOOLEAN')
+        if contains_aggrs(where_cond):
+            raise ValidatorException('WHERE condition contains an aggregate expression')
     else:
         where_cond = None
+    # validate GROUP BY:
+    if 'group' in parse_tree.args:
+        groupby_valexprs = list()
+        for node in parse_tree.args['group'].expressions:
+            e = validate_valexpr(node, from_tables, from_aliases)
+            if contains_aggrs(e):
+                raise ValidatorException(f'GROUP BY contains aggregate: {e.to_str()}')
+            groupby_valexprs.append(e)
+    else:
+        groupby_valexprs = None
+    # validate HAVING:
+    if 'having' in parse_tree.args:
+        if groupby_valexprs is None:
+            groupby_valexprs = list()
+        having_cond = validate_valexpr(parse_tree.args['having'].this, from_tables, from_aliases)
+        if having_cond.valtype() != ValType.BOOLEAN:
+            raise ValidatorException('HAVING expression is not BOOLEAN')
+        for non_aggr_part in find_non_aggrs(having_cond):
+            if not is_computable_from(non_aggr_part, groupby_valexprs):
+                raise ValidatorException(f'HAVING contains a part that cannot be evaluated over a group: {non_aggr_part.to_str()}')
+    else:
+        having_cond = None
     # validate SELECT:
     select_valexprs = list()
     select_aliases = list()
@@ -195,7 +224,18 @@ def validate_select(mm: MetadataManager, tx: Transaction, parse_tree: exp.Select
             raise ValidatorException('unexpected error')
         select_valexprs.append(validate_valexpr(node.this, from_tables, from_aliases))
         select_aliases.append(node.args['alias'].name)
-    return SFWGHLop(select_valexprs, select_aliases, from_tables, from_aliases, where_cond)
+    # if SELECT involves aggregation, GROUP BY is implied:
+    if groupby_valexprs is None and any(contains_aggrs(e) for e in select_valexprs):
+        groupby_valexprs = list()
+    if groupby_valexprs is not None:
+        for e in select_valexprs:
+            for non_aggr_part in find_non_aggrs(e):
+                if not is_computable_from(non_aggr_part, groupby_valexprs):
+                    raise ValidatorException(f'SELECT contains a part that cannot be evaluated over a group: {non_aggr_part.to_str()}')
+    return SFWGHLop(select_valexprs, select_aliases, from_tables, from_aliases,
+                    where_cond = where_cond,
+                    groupby_valexprs = groupby_valexprs,
+                    having_cond = having_cond)
 
 def validate_base_table(mm: MetadataManager, tx: Transaction, table_name: str, return_row_id: bool = False) -> BaseTableLop:
     table_metadata = mm.get_base_table_metadata(tx, table_name)
@@ -243,6 +283,12 @@ def validate_valexpr(tree, from_tables: list[QLop], from_aliases: list[str]) -> 
     func_mapping: Final[dict[type[exp.Expression], type[func.FunCallValExpr]]] = {
         exp.Lower: func.LOWER,
         exp.Upper: func.UPPER,
+        exp.Sum: aggr.SUM,
+        exp.Count: aggr.COUNT,
+        exp.Avg: aggr.AVG,
+        exp.StddevPop: aggr.STDDEV_POP,
+        exp.Min: aggr.MIN,
+        exp.Max: aggr.MAX,
     }
     anon_func_mapping: Final[dict[str, type[func.FunCallValExpr]]] = {
         # these are not recognized by parser as built-in; they end up in exp.Anonymous:
@@ -254,10 +300,24 @@ def validate_valexpr(tree, from_tables: list[QLop], from_aliases: list[str]) -> 
         return binary_mapping[type(tree)](validate_valexpr(tree.this, from_tables, from_aliases),
                                           validate_valexpr(tree.expression, from_tables, from_aliases))
     elif type(tree) in func_mapping:
-        func_arg_exprs = [validate_valexpr(tree.this, from_tables, from_aliases)]
-        for arg in tree.expressions:
-            func_arg_exprs.append(validate_valexpr(arg, from_tables, from_aliases))
-        return func_mapping[type(tree)](tuple(func_arg_exprs))
+        func_type = func_mapping[type(tree)]
+        func_arg_exprs: list[ValExpr] = list()
+        if type(tree.this) == exp.Distinct:
+            if not issubclass(func_type, aggr.AggrValExpr):
+                raise ValidatorException(f'{func_type.name}(DISTINCT ...) not supported')
+            for arg in tree.this.expressions:
+                func_arg_exprs.append(validate_valexpr(arg, from_tables, from_aliases))
+        else:
+            if func_type == aggr.COUNT and type(tree.this) == exp.Star:
+                func_arg_exprs.append(LiteralNumber(1))
+            else:
+                func_arg_exprs.append(validate_valexpr(tree.this, from_tables, from_aliases))
+            for arg in tree.expressions:
+                func_arg_exprs.append(validate_valexpr(arg, from_tables, from_aliases))
+        if issubclass(func_type, aggr.AggrValExpr):
+            return func_type(tuple(func_arg_exprs), type(tree.this) == exp.Distinct)
+        else:
+            return func_type(tuple(func_arg_exprs))
     elif type(tree) == exp.Anonymous and (anon_func := anon_func_mapping.get(tree.this.lower(), None)) is not None:
         func_arg_exprs = list()
         for arg in tree.expressions:
@@ -279,6 +339,8 @@ def validate_valexpr(tree, from_tables: list[QLop], from_aliases: list[str]) -> 
             return func.CAST(
                 (validate_valexpr(tree.this, from_tables, from_aliases), ),
                 dict(AS=validate_type(tree.args['to'].this)))
+        case exp.Distinct:
+            return validate_valexpr(tree.expressions[0], from_tables, from_aliases)
         case _:
             raise ValidatorException(f'{type(tree).__name__} construct currently not supported')
 

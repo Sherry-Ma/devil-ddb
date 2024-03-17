@@ -8,17 +8,27 @@ INSERT INTO R VALUES
     (2, 'two', 4),
     (3, 'three', 6),
     (4, 'four', 8);
+
 CREATE TABLE S(C INT, D VARCHAR, E FLOAT, F INT, G DATETIME);
 CREATE INDEX ON S(C);
 INSERT INTO S VALUES
     (2, 'S two', 2.0, 4, '2000-01-02'),
     (4, 'S four', 4.0, 8, '2000-01-04'),
     (6, 'S six', 6.0, 12, '2000-01-06'),
+    (8, 'S eight', 8.0, 16, '2000-01-08'),
+    (8, 'S eight', 8.0, 16, '2000-01-08'),
+    (8, 'S eight', 8.0, 16, '2000-01-08'),
     (8, 'S eight', 8.0, 16, '2000-01-08');
+
+SELECT FROM R, S;
+
 SHOW TABLES;
 COMMIT;
 
 SET DEBUG ON;
+SET PLANNER NAIVE; -- or BASELINE
+ANALYZE;
+SET AUTOCOMMIT ON;
 
 SELECT * FROM R, S WHERE A = S.C; -- should be index nested loop on secondary index S(C)
 SELECT R.*, S.* FROM S, R WHERE A = S.C; -- should be index nested loop on primary index R(A)
@@ -38,15 +48,22 @@ SELECT R.*, S.* FROM S, R WHERE A = F;
 SELECT * FROM R, S WHERE R.C = E; -- try cast
 SELECT * FROM R, S WHERE R.C = F;
 
+-- now try aggr
+SELECT A FROM R GROUP BY A HAVING SUM(C) > 5;
+SELECT S.C, SUM(S.E) FROM R, S WHERE R.A < S.C GROUP BY S.C HAVING SUM(S.E) > 20;
+SELECT C, SUM(E) FROM S group by C HAVING MIN(DISTINCT(G)) > '2000-01-02';
+SELECT C, SUM(E) FROM S group by C HAVING MIN(G) > '2000-01-02';
+SELECT A, COUNT(*) FROM R GROUP BY A HAVING MIN(C) > 5;
+SELECT A, COUNT(*) FROM R GROUP BY A HAVING SUM(C) - 1 > 5;
+SELECT A FROM R GROUP BY A HAVING SUM(C) > 5;
+SELECT C FROM S WHERE G > '2000-01-02';
+SELECT C FROM S group by C HAVING MIN(G) > '2000-01-02';
 COMMIT;
 
-SET PLANNER NAIVE; -- or BASELINE
-ANALYZE;
+SET AUTOCOMMIT OFF;
 INSERT INTO S (SELECT C, D, E+100, F, G FROM S);
 INSERT INTO S (SELECT C, D, E+100, F, G FROM S);
 INSERT INTO S (SELECT C, D, E+100, F, G FROM S);
 INSERT INTO s (SELECT C, D, CAST(E AS INT), F, G FROM S WHERE C = 2); -- test automatic conversion from INT to FLOAT when inserting
-
 ANALYZE S;
-
 COMMIT;

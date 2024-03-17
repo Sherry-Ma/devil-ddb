@@ -3,6 +3,7 @@ Any module that needs to evaluate such compile code should do ``import *`` on th
 """
 
 import re
+from math import sqrt
 from dateutil.parser import parse as str_to_datetime
 
 def regexp_match(s: str, pattern: str):

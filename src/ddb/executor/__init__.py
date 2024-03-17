@@ -33,3 +33,4 @@ from .join.bnlj import BNLJoinPop
 from .join.mergeeqj import MergeEqJoinPop
 from .join.indexnlj import IndexNLJoinPop
 from .join.hasheqj import HashEqJoinPop
+from .aggr import AggrPop

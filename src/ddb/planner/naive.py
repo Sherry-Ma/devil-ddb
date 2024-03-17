@@ -1,8 +1,9 @@
 from ..globals import DEFAULT_BNLJ_BUFFER_SIZE
-from ..validator import SFWGHLop, BaseTableLop
-from ..executor import StatementContext, QPop, TableScanPop, BNLJoinPop, FilterPop, ProjectPop
+from ..validator import SFWGHLop, BaseTableLop, valexpr
+from ..executor import StatementContext, QPop, TableScanPop, BNLJoinPop, FilterPop, ProjectPop, MergeSortPop
 
 from .interface import Planner, PlannerException
+from .util import add_groupby_by_sorting, add_having_and_select
 
 class NaivePlanner(Planner):
     @classmethod
@@ -21,5 +22,11 @@ class NaivePlanner(Planner):
             raise PlannerException('unexpected error')
         if block.where_cond is not None:
             plan = FilterPop(plan, block.where_cond)
-        plan = ProjectPop(plan, block.select_valexprs, block.select_aliases)
+        if block.groupby_valexprs is not None:
+            plan, groupby_indcies = add_groupby_by_sorting(plan, block.groupby_valexprs)
+            plan = add_having_and_select(
+                plan, block.groupby_valexprs, groupby_indcies,
+                block.having_cond, block.select_valexprs, block.select_aliases)
+        else:
+            plan = ProjectPop(plan, block.select_valexprs, block.select_aliases)
         return plan

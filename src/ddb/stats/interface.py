@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     # are required to avoid Python circular import nightmare.
     from ..storage import StorageManager
     from ..metadata import MetadataManager, BaseTableMetadata
-    from ..validator import ValExpr
+    from ..validator import ValExpr, valexpr
     from ..executor import StatementContext
 
 @dataclass
@@ -120,10 +120,12 @@ class StatsManager(ABC, Generic[TZ, CZ]):
         pass
 
     @abstractmethod
-    def grouping_stats(self, stats: TZ, grouping_exprs: list['ValExpr']) -> TZ:
-        """Estimate stats for the output groups of a grouping operation specified by ``grouping_exprs``
+    def grouping_stats(self, stats: TZ,
+                       grouping_exprs: list['ValExpr'],
+                       aggr_exprs: list['valexpr.AggrValExpr']) -> TZ:
+        """Estimate stats for a grouping+aggregation operation specified by ``grouping_exprs`` and ``aggr_exprs``
         over the input table with ``stats``.
-        We assume that all column references in ``grouping_exprs`` are :class:`.RelativeColumnRef` objects.
+        We assume that all column references in ``grouping_exprs`` and ``aggr_exprs`` are :class:`.RelativeColumnRef` objects.
         """
         pass
 
@@ -131,6 +133,7 @@ class StatsManager(ABC, Generic[TZ, CZ]):
     def join_stats(self, left_stats: TZ, right_stats: TZ, cond: 'ValExpr | None') -> TZ:
         """Estimate stats for the output of a join with join condition ``cond``
         over left and right inputs with respective stats.
+        We assume that all column references in ``cond`` are :class:`.RelativeColumnRef` objects.
         """
         pass
 

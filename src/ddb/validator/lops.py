@@ -47,12 +47,16 @@ class SFWGHLop(QLop):
                  select_aliases: list[str],
                  from_tables: list[QLop],
                  from_aliases: list[str],
-                 where_cond: ValExpr | None) -> None:
+                 where_cond: ValExpr | None = None,
+                 groupby_valexprs: list[ValExpr] | None = None,
+                 having_cond: ValExpr | None = None) -> None:
         self.select_valexprs: Final = select_valexprs
         self.select_aliases: Final = select_aliases
         self.from_tables: Final = from_tables
         self.from_aliases: Final = from_aliases
         self.where_cond: Final = where_cond
+        self.groupby_valexprs: Final = groupby_valexprs
+        self.having_cond: Final = having_cond
         self.inferred_metadata = TableMetadata(select_aliases, [e.valtype() for e in select_valexprs])
         return
 
@@ -65,6 +69,12 @@ class SFWGHLop(QLop):
             yield f' {select_alias}: ' + select_valexpr.to_str()
         if self.where_cond is not None:
             yield f'{ANSI.H2}WHERE:{ANSI.END} ' + self.where_cond.to_str()
+        if self.groupby_valexprs is not None:
+            yield f'{ANSI.H2}GROUP BY:{ANSI.END}'
+            for groupby_valexpr in self.groupby_valexprs:
+                yield ' ' + groupby_valexpr.to_str()
+        if self.having_cond is not None:
+            yield f'{ANSI.H2}HAVING:{ANSI.END} ' + self.having_cond.to_str()
         yield f'{ANSI.H2}FROM:{ANSI.END} ' + ', '.join(self.from_aliases)
         for from_table, from_alias in zip(self.from_tables, self.from_aliases):
             for i, s in enumerate(from_table.pstr()):

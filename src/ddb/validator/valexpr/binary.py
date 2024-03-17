@@ -56,8 +56,9 @@ class DIVIDE(ArithOpValExpr, BinaryOpValExpr):
     def _code_str(self, children_code_str: tuple[str, ...]) -> str:
         left_code, right_code = children_code_str
         if self.valtype() == ValType.INTEGER:
-            # when Python divides two ints, it will return a float, but SQL will return int:
-            return f'int(({left_code}) / ({right_code}))'
+            # when Python divides two ints by /, it's actually a float division;
+            # use // to force integer division:
+            return f'({left_code}) // ({right_code})'
         else:
             return super()._code_str(children_code_str)
 

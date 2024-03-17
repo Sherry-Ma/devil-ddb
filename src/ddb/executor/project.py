@@ -1,4 +1,4 @@
-from typing import Final, Iterable, Generator, Any
+from typing import cast, Final, Iterable, Sequence, Generator, Any
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -29,8 +29,9 @@ class ProjectPop(QPop['ProjectPop.CompiledProps']):
                 yield f'code for {column_name}: {code}'
             return
 
-    def __init__(self, input: QPop[QPop.CompiledProps], exprs: list[ValExpr], column_names: Iterable[str | None] | None) -> None:
-        """Construct a filter on top of the given ``input``.
+    def __init__(self, input: QPop[QPop.CompiledProps], exprs: list[ValExpr], column_names: Sequence[str | None] | None) -> None:
+        """Construct a projection on top of the given ``input``.
+        If ``columns_names`` is None or if some of its entries are None, some internal names will be assigned automatically.
         """
         super().__init__(input.context)
         self.input: Final = input
@@ -101,7 +102,7 @@ class ProjectPop(QPop['ProjectPop.CompiledProps']):
     def estimated(self) -> QPop.EstimatedProps:
         stats = self.context.zm.projection_stats(
             self.input.estimated.stats,
-            [valexpr.relativize(e, [self.input.compiled.output_lineage]) for e in self.output_exprs])
+            [ cast(ValExpr, valexpr.relativize(e, [self.input.compiled.output_lineage])) for e in self.output_exprs])
         return QPop.EstimatedProps(
             stats = stats,
             blocks = QPop.EstimatedProps.StatsInBlocks(

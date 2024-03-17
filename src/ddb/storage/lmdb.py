@@ -62,7 +62,6 @@ class LMDBHeapFile(HeapFile):
 
         def finalize(self, result: Any):
             super().finalize(result)
-            stat: Final = self.obj.stat()
             if self._method_name in ('iter_scan'):
                 self.num_blocks_read += self._estimate_blocks(self.num_next_calls)
                 if self.num_blocks_read > 1:
