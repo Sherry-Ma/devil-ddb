@@ -40,7 +40,8 @@ class TableStats:
 
     def block_count(self) -> int:
         return ceil(self.row_count * self.row_size /\
-                    (BLOCK_SIZE * (1 if self.fill_factor is None else self.fill_factor)))
+                    (BLOCK_SIZE * (1 if self.fill_factor is None or self.fill_factor == 0 else
+                                   self.fill_factor)))
 
     def pstr(self) -> Iterable[str]:
         yield f'output rows: {self.row_count} = {self.block_count()} blocks @{self.row_size}B/row'

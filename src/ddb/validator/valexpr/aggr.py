@@ -124,7 +124,7 @@ class AVG(AggrValExpr):
         return f'(({state1})[0] + ({state2})[0], ({state1})[1] + ({state2})[1])'
 
     def code_str_finalize(self, state: str) -> str:
-        return f'({state})[0] / float(({state})[1])'
+        return f'None if ({state})[1] == 0 else ({state})[0] / float(({state})[1])'
 
 class STDDEV_POP(AggrValExpr):
     name = 'STDDEV_POP'
