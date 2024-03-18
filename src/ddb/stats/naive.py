@@ -172,7 +172,7 @@ class NaiveStatsManager(StatsManager[NaiveTableStats, NaiveCollectionStats]):
                 else: # a wild guess
                     new_distinct_count = int(max(distinct_count/3, 1))
                 new_stats.distinct_counts[col.column_index] = new_distinct_count
-                selectivity = selectivity * new_distinct_count / distinct_count
+                selectivity = 0 if not distinct_count else selectivity * new_distinct_count / distinct_count
             else: # a wild guess
                 # hard to say distinct counts are affected, so assume preservation of value sets by default,
                 # but still apply an overall reduction:
