@@ -5,6 +5,7 @@ from functools import wraps
 import time
 
 from .globals import ANSI
+from .util import MinMaxSum
 
 class ProfileException(Exception):
     """Exceptions thrown by functions in the :mod:`.profile` module.
@@ -27,7 +28,7 @@ class ProfileStat:
         ts: time when call started (``time.monotonic_ns()``).
         ns_thread: total thread time (in ns) spent, including system and user CPU time but not time elapsed during sleep.
         ns_elapsed: total elapsed time (in ns).
-        num_next_calss: number of ``next()`` calls on a generator (including the last one signifying the end).
+        num_next_calls: number of ``next()`` calls on a generator (including the last one signifying the end).
         num_blocks_read: number of disk blocks read.
         num_blocks_written: number of disk block written.
     """
@@ -77,7 +78,6 @@ class ProfileStat:
 
     def next_stop(self, result: Any) -> None:
         """For interator only: stop the timer after completing a ``next()`` call and restarts the timer.
-        The actual ``next()`` call should follow immediately.
         """
         self.stop()
         return
@@ -171,6 +171,58 @@ class ProfileContext:
         self.call_end(stat, None)
         return
 
+    def summarize_block_stats_for_execute(self, stat: ProfileStat) -> tuple[int, int, int]:
+        """Given ``stat``, summarize stats about block I/Os incurred by this method and it call graph descendants.
+        The components returned, in order, are:
+        number of blocks read by this method and its descendants (excluding any ``execute()`` descendants);
+        number of blocks written by this method and its descendants (excluding any ``execute()`` descendants);
+        overall number of I/Os by this method and its descendants.
+        NOTE: We assume there is no recursion in the call graph.
+        """
+        num_blocks_read = stat.num_blocks_read
+        num_blocks_written = stat.num_blocks_written
+        desc_blocks = 0
+        for stat2 in self.stats:
+            if stat2.caller is not None and stat2.caller == stat:
+                child_read, child_written, child_overall = self.summarize_block_stats_for_execute(stat2)
+                if stat2.method_name.endswith('.execute'):
+                    desc_blocks += child_overall
+                else: # count toward self:
+                    num_blocks_read += child_read
+                    num_blocks_written += child_written
+                    desc_blocks += child_overall - child_read - child_written
+        return num_blocks_read, num_blocks_written, desc_blocks + num_blocks_read + num_blocks_written
+
+    def summarize_stats(self, obj: Any) ->\
+        tuple[int, MinMaxSum[int], MinMaxSum[int], MinMaxSum[int], MinMaxSum[int], MinMaxSum[int]]:
+        """Given ``obj``, a ``Pop`` object, summarize stats about its ``execute()`` calls.
+        The components returned, in order, are:
+        number of times ``execute()`` is called;
+        min/max/total number of ``next()`` calls over these `execute()`` calls;
+        min/max/total elapsed time (in ns) over these calls;
+        min/max/total number of blocks read over these `execute()`` calls (excluding descendant ``Pop``s);
+        min/max/total number of blocks written over these `execute()`` calls (excluding descendant ``Pop``s);
+        min/max/total number of block I/Os over these `execute()`` calls (including descendant ``Pop``s).
+        NOTE: We assume there is no recursion in the call graph.
+        """
+        num_stats = 0
+        next_calls = MinMaxSum[int]()
+        ns_elapsed = MinMaxSum[int]()
+        blocks_read = MinMaxSum[int]()
+        blocks_written = MinMaxSum[int]()
+        blocks_overall = MinMaxSum[int]()
+        for stat in self.stats:
+            if (obj is None or stat.oid == id(obj))\
+            and stat.method_name.endswith('.execute'):
+                num_stats += 1
+                next_calls.add(stat.num_next_calls)
+                ns_elapsed.add(stat.ns_elapsed)
+                num_blocks_read, num_blocks_written, num_blocks_overall = self.summarize_block_stats_for_execute(stat)
+                blocks_read.add(num_blocks_read)
+                blocks_written.add(num_blocks_written)
+                blocks_overall.add(num_blocks_overall)
+        return num_stats, next_calls, ns_elapsed, blocks_read, blocks_written, blocks_overall
+
     def pstr_stats(self, caller: ProfileStat | None = None, indent: int = 0) -> Iterable[str]:
         """Produce a sequence of lines, "pretty-print" style, for summarizing the collected stats.
         """
@@ -186,19 +238,40 @@ class ProfileContext:
             yield from self.pstr_stats(stat, indent+1)
         return
 
-profile_context = ProfileContext()
+profile_context = None
 
 def new_profile_context() -> ProfileContext:
-    """Set a new profile context and return it.
-    From this point on, all profiling information will be held in this new context.
-    Any existing profile context will be discarded.
-
-    TODO: This method of setting profile context globally will NOT work when we have concurrent transactions.
+    """Create a new profile context and set it globally for subsequent execution.
+    TODO: This method of getting the profile context through a global variable will NOT work when we have concurrent transactions.
     At the very least we might consider using a thread-global object.
+    The alternative of passing in the context in every call would complicate the API too much.
     """
     global profile_context
     profile_context = ProfileContext()
     return profile_context
+
+def get_profile_context() -> ProfileContext | None:
+    """Locate the appropriate profile context object for current execution.
+    TODO: This method of getting the profile context through a global variable will NOT work when we have concurrent transactions.
+    The alternative of passing in the context in every call would complicate the API too much.
+    """
+    global profile_context
+    return profile_context
+    # """Here is an alternative method by by inspecting the current call stack.
+    # Specifically, look for the lowest ancestor caller with ``self`` and
+    # whose ``self.context.profile_context`` is a :class:`.ProfileContext`
+    # (i.e., it comes from a ``Pop``'s ``StatementContext``).
+    # NOTE: This is a very Pythonic hack, to some extent to get around circular imports.
+    # This is a bit better than the global variable hack, but ispecting the stack adds too much runtime overhead.
+    # """
+    # current_stack = stack()
+    # for frame_info in current_stack[::-1]:
+    #     if (obj := frame_info.frame.f_locals.get('self', None)) is not None\
+    #         and (context := getattr(obj, 'context', None)) is not None\
+    #         and (profile_context := getattr(context, 'profile_context', None)) is not None\
+    #         and isinstance(profile_context, ProfileContext):
+    #         return profile_context
+    # return None
 
 def profile(stat_cls: type[ProfileStat] = ProfileStat):
     """Decorate a member method of some class to enable collecting statistics on its invocations.
@@ -207,9 +280,12 @@ def profile(stat_cls: type[ProfileStat] = ProfileStat):
     def _profile(method):
         @wraps(method)
         def wrap(self, *args, **kw):
-            stat = profile_context.call_begin(stat_cls, method, self, *args, **kw)
+            profile_context = get_profile_context()
+            if profile_context is not None:
+                stat = profile_context.call_begin(stat_cls, method, self, *args, **kw)
             result = method(self, *args, **kw)
-            profile_context.call_end(stat, result)
+            if profile_context is not None:
+                profile_context.call_end(stat, result)
             return result
         return wrap
     return _profile
@@ -221,26 +297,34 @@ def profile_generator(stat_cls: type[ProfileStat] = ProfileStat):
     def _profile_generator(generator_method: type):
         @wraps(generator_method)
         def wrap(self, *args, **kw):
-            stat = profile_context.gen_construct_begin(stat_cls, generator_method, self, *args, **kw)
+            profile_context = get_profile_context()
+            if profile_context is not None:
+                stat = profile_context.gen_construct_begin(stat_cls, generator_method, self, *args, **kw)
             try:
-                # contruct the generator object:
+                # construct the generator object:
                 it = generator_method(self, *args, **kw)
-                profile_context.gen_construct_end(stat, it)
+                if profile_context is not None:
+                    profile_context.gen_construct_end(stat, it)
                 # start iterations:
                 while True:
                     value = None
                     try:
-                        profile_context.gen_next_begin(stat)
+                        if profile_context is not None:
+                            profile_context.gen_next_begin(stat)
                         value = next(it)
-                        profile_context.gen_next_end(stat, value)
+                        if profile_context is not None:
+                            profile_context.gen_next_end(stat, value)
                     except StopIteration: # catch natural termination of the wrapped generator
-                        profile_context.gen_next_end(stat, None)
+                        if profile_context is not None:
+                            profile_context.gen_next_end(stat, None)
                         break
                     yield value
             finally: # catch the case that caller may stop early and call close()
-                profile_context.gen_close_begin(stat)
+                if profile_context is not None:
+                    profile_context.gen_close_begin(stat)
                 it.close() # close the wrapped generator too
-                profile_context.gen_close_end(stat)
+                if profile_context is not None:
+                    profile_context.gen_close_end(stat)
             return
         return wrap
     return _profile_generator

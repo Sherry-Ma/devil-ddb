@@ -1,7 +1,7 @@
 """This module mostly defines *abstract* classes and documents the execution API.
 Other modules in the same subpackage define implementation classes.
 """
-from typing import final, TypeVar, Generic, Self, Final, Iterable, Generator, Any
+from typing import cast, final, TypeVar, Generic, Self, Final, Iterable, Generator, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cached_property
@@ -13,6 +13,8 @@ from ..metadata import MetadataManager, TableMetadata
 from ..stats import StatsManager, TableStats, CollectionStats
 from ..validator import valexpr, ValExpr, OutputLineage
 from ..transaction import Transaction
+from ..profile import ProfileContext
+from ..util import MinMaxSum
 
 class ExecutorException(Exception):
     """Exceptions thrown at execution time, mostly by functions in the :mod:`.executor` package.
@@ -29,6 +31,7 @@ class StatementContext:
     zm: StatsManager[TableStats, CollectionStats]
     tx: Transaction
     tmp_tx: Transaction
+    profile_context: ProfileContext
 
 class Pop(ABC, metaclass=CustomInitMeta):
     """An object representing a statement --- either a query (:class:`.QPop`) or
@@ -165,30 +168,33 @@ class QPop(Pop, Generic[P]):
                               **kwargs))
 
     @dataclass
+    class StatsInBlocks:
+        """A helper data structure to succinctly capture a number of stats related to block I/Os.
+        """
+        self_reads: int
+        """Number of disk block reads performed by this operator (not including children's).
+        """
+        self_writes: int
+        """Number of disk block writes performed by this operator (not including children's).
+        """
+        overall: int
+        """Number of I/Os (block reads/writes) performed by this operator and its descendents.
+        """
+
+    @dataclass
     class EstimatedProps:
         """Estimated properties of the operator, available by calling :meth:`.QPop.estimated`.
         """
         stats: TableStats
         """Estimated data stats for this operator's output.
         """
-        @dataclass
-        class StatsInBlocks:
-            self_reads: int
-            """Estimated number of disk block reads performed by this operator (not including children's).
-            """
-            self_writes: int
-            """Estimated number of disk block writes performed by this operator (not including children's).
-            """
-            overall: int
-            """Estimated number of I/Os (block reads/writes) performed by this operator and its descendents.
-            """
-        blocks: StatsInBlocks
+        blocks: 'QPop.StatsInBlocks'
         """Estimated I/Os incurred by each :meth:`.QPop.execute` pass.
         If this operator performs some caching in the first pass to reduce the costs of subsubsequent passes,
         these estimates should refer to the I/Os in a "steady-state" pass;
         I/Os incurred in the first pass can be adjusted in :attr:`.blocks_extra_init`.
         """
-        blocks_extra_init: StatsInBlocks | None = None
+        blocks_extra_init: 'QPop.StatsInBlocks | None' = None
         """Estimated one-time *extra* I/Os incurred by the very first :meth:`.QPop.execute` pass,
         or ``None`` if the first pass isn't special.
         Here the ``overall`` attribute includes any extra I/Os incurred by descendants for this
@@ -206,6 +212,54 @@ class QPop(Pop, Generic[P]):
                 f'with {self.blocks_extra_init.self_reads} reads / {self.blocks_extra_init.self_writes} writes by this op'
             for s in self.stats.pstr():
                 yield f'{s}'
+            return
+
+    @dataclass
+    class MeasuredProps:
+        """Measured properties of the operator, available by calling :meth:`.QPop.measured`.
+        """
+        num_execute_calls: int
+        """Number of ``execute()`` passes that this :class:`.QPop` has been called to perform.
+        """
+        rows_yielded: MinMaxSum[int]
+        """Minimum/maximum numbers of rows returned during any one ``executed()`` pass,
+        along with the total number of rows returned over all ``execute()`` passes.
+        """
+        ns_elapsed: MinMaxSum[int]
+        """Minimum/maximum time (in ns) elapsed during any one ``executed()`` pass,
+        along with the total elapsed time over all ``execute()`` passes.
+        """
+        min_blocks: 'QPop.StatsInBlocks'
+        """Each stat herein is the minimum observed during any one ``executed()`` pass.
+        """
+        max_blocks: 'QPop.StatsInBlocks'
+        """Each stat herein is the maximum observed during any one ``executed()`` pass.
+        """
+        sum_blocks: 'QPop.StatsInBlocks'
+        """Total stats observed over all ``execute()`` passes.
+        """
+
+        def pstr(self) -> Iterable[str]:
+            """Produce a sequence of lines for pretty-printing the object.
+            """
+            if self.num_execute_calls > 1:
+                yield f'# execute() calls = {self.num_execute_calls}'
+                if self.num_execute_calls > 0:
+                    yield f'rows yielded/call: {self.rows_yielded.sum / self.num_execute_calls}'\
+                        + f' in [{self.rows_yielded.min}, {self.rows_yielded.max}]'
+                    yield f'elapsed time/call: {self.ns_elapsed.sum / self.num_execute_calls / 1000000}ms'\
+                        + f' in [{cast(int, self.ns_elapsed.min)/1000000}ms, {cast(int, self.ns_elapsed.max)/1000000}ms]'
+                    yield f'block reads/call: {self.sum_blocks.self_reads / self.num_execute_calls}'\
+                        + f' in [{self.min_blocks.self_reads}, {self.max_blocks.self_reads}]'
+                    yield f'block writes/call: {self.sum_blocks.self_writes / self.num_execute_calls}'\
+                        + f' in [{self.min_blocks.self_writes}, {self.max_blocks.self_writes}]'
+            elif self.num_execute_calls == 1:
+                yield f'rows yielded: {self.rows_yielded.sum}'
+                yield f'elapsed time: {self.ns_elapsed.sum}'
+                yield f'block reads: {self.sum_blocks.self_reads}'
+                yield f'block writes: {self.sum_blocks.self_writes}'
+            else:
+                yield f'no execute() call'
             return
 
     @final
@@ -244,6 +298,10 @@ class QPop(Pop, Generic[P]):
             yield f'{prefix}{ANSI.DEMPH}{ANSI.UNDERLINE}estimated:{ANSI.END}'
             for s in self.estimated.pstr():
                 yield f'{prefix}{ANSI.DEMPH} {s}{ANSI.END}'
+        if 'measured' in self.__dict__: # test without triggering compiled()
+            yield f'{prefix}{ANSI.DEMPH}{ANSI.UNDERLINE}measured:{ANSI.END}'
+            for s in self.measured.pstr():
+                yield f'{prefix}{ANSI.DEMPH} {s}{ANSI.END}'
         for c in self.children():
             for s in c.pstr(indent+1):
                 yield s
@@ -272,12 +330,12 @@ class QPop(Pop, Generic[P]):
         this method will also account for all extra init cost incurred by operators in this plan
         (and will not overcount if the plan is a DAG).
         """
-        extra_init_objects: set[QPop.EstimatedProps.StatsInBlocks] = set()
+        extra_init_objects: set[QPop.StatsInBlocks] = set()
         self._estimated_cost_helper(extra_init_objects)
         extra_init_total = sum(extra.overall for extra in extra_init_objects)
         return extra_init_total + self.estimated.blocks.overall
 
-    def _estimated_cost_helper(self, extra_init_objects: set[EstimatedProps.StatsInBlocks]) -> None:
+    def _estimated_cost_helper(self, extra_init_objects: 'set[QPop.StatsInBlocks]') -> None:
         if self.estimated.blocks_extra_init in extra_init_objects:
             # already visited this subtree; skip:
             return
@@ -287,6 +345,29 @@ class QPop(Pop, Generic[P]):
         if self.estimated.blocks_extra_init is not None:
             extra_init_objects.add(self.estimated.blocks_extra_init)
         return
+
+    @cached_property
+    @final
+    def measured(self) -> MeasuredProps:
+        for c in self.children():
+            c.measured
+        num_execute_calls, next_calls, ns_elapsed, blocks_read, blocks_written, blocks_overall =\
+            self.context.profile_context.summarize_stats(self)
+        def make_StatsInBlocks(read: int|None, written: int|None, overall:int|None):
+            return QPop.StatsInBlocks(
+                0 if read is None else read,
+                0 if written is None else written,
+                0 if overall is None else overall)
+        return QPop.MeasuredProps(
+            num_execute_calls = num_execute_calls,
+            rows_yielded = MinMaxSum(
+                min = 0 if next_calls.min is None else next_calls.min-1,
+                max = 0 if next_calls.max is None else next_calls.max-1,
+                sum = next_calls.sum-num_execute_calls),
+            ns_elapsed = ns_elapsed,
+            min_blocks = make_StatsInBlocks(blocks_read.min, blocks_written.min, blocks_overall.min),
+            max_blocks = make_StatsInBlocks(blocks_read.max, blocks_written.max, blocks_overall.max),
+            sum_blocks = make_StatsInBlocks(blocks_read.sum, blocks_written.sum, blocks_overall.sum))
 
     @abstractmethod
     def memory_blocks_required(self) -> int:

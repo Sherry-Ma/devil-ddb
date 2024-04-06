@@ -129,7 +129,7 @@ class MergeSortPop(QPop['MergeSortPop.CompiledProps']):
         block_self_writes = stats.block_count() * (num_passes-1)
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = block_self_reads,
                 self_writes = block_self_writes,
                 overall = self.input.estimated.blocks.overall + block_self_reads + block_self_writes))

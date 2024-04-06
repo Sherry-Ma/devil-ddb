@@ -69,7 +69,7 @@ class BNLJoinPop(JoinPop['BNLJoinPop.CompiledProps']):
         num_right_passes = ceil(self.left.estimated.stats.block_count() / self.num_memory_blocks)
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = 0,
                 self_writes = 0,
                 overall = self.left.estimated.blocks.overall +\

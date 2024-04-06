@@ -86,7 +86,8 @@ class AggrPop(QPop['AggrPop.CompiledProps']):
             else:
                 self.output_column_names.append(INTERNAL_ANON_COLUMN_NAME_FORMAT.format(index = i)) # default
         self.num_memory_blocks: Final = num_memory_blocks
-        if self.num_memory_blocks <= 2:
+        self.num_non_incremental: Final = sum(not aggr.is_incremental() for aggr in self.aggr_exprs)
+        if self.num_memory_blocks < 3 * self.num_non_incremental:
             raise ExecutorException('aggregation needs at least 3 memory blocks for merge sort')
         return
 
@@ -189,14 +190,89 @@ class AggrPop(QPop['AggrPop.CompiledProps']):
              for a in self.aggr_exprs])
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = 0,
                 self_writes = 0,
                 overall = self.input.estimated.blocks.overall))
     
+    def _tmp_file_create(self, aggr_i: int, level: int, run: int) -> HeapFile:
+        """Create a temporary file for a result run in a given level with an ordinal run number,
+        used for computing non-incremental ``self.aggr_exprs[aggr_i]``.
+        Levels start at ``0`` (results of initial sorting pass) and go up by one with each additional merge pass.
+        Each level may contain multiple result runs, numbered from ``0``.
+        The file name is chosen in a way to help deduce which ``Pop`` produced it and what level and run number it has.
+        """
+        f = self.context.sm.heap_file(
+            self.context.tmp_tx,
+            f'.tmp-{hex(id(self))}-{aggr_i}-{level}-{run}', [], create_if_not_exists=True)
+        f.truncate()
+        return f
+
+    def _tmp_file_delete(self, run: HeapFile) -> None:
+        """Delete a temporary file for a result run.
+        """
+        self.context.sm.delete_heap_file(self.context.tmp_tx, run.name)
+        return
+
+    @staticmethod
+    def _compare(this: tuple, that: tuple) -> int:
+        if this < that:
+            return -1
+        elif this == that:
+            return 0
+        else:
+            return 1
+
+    def _finalize_group(self, sort_buffers: list[ExtSortBuffer|None], aggr_states: list) -> tuple:
+        # process inputs for non-incremental aggregates first:
+        for i, (buffer, exec) in enumerate(zip(sort_buffers, self.compiled.aggr_add_execs)):
+            if buffer is not None:
+                state = aggr_states[i]
+                for row in cast(ExtSortBuffer, buffer).iter_and_clear():
+                    new_val = row[0] if len(row) == 1 else row
+                    state = eval(exec, None, dict(state = state, new_val = new_val))
+                aggr_states[i] = state
+        # finalize everything:
+        return tuple(eval(exec, None, dict(state=state))
+                     for exec, state
+                     in zip(self.compiled.aggr_finalize_execs, aggr_states))
+
     @profile_generator()
     def execute(self) -> Generator[tuple, None, None]:
-        # THIS IS WHERE PART OF YOUR MILESTONE 3 CODE SHOULD GO
-        # but feel free to declare other helper methods in this class as you see fit
-        yield from ()
+        sort_buffers: list[ExtSortBuffer|None] = [ # for non-incremental aggregates
+            None if aggr_expr.is_incremental() else
+            ExtSortBuffer(self._compare,
+                          partial(self._tmp_file_create, i), self._tmp_file_delete,
+                          self.num_memory_blocks // self.num_non_incremental,
+                          deduplicate=aggr_expr.is_distinct)
+            for i, aggr_expr in enumerate(self.aggr_exprs)
+        ]
+        cur_groupby_vals: tuple|None = None
+        aggr_states: list = list()
+        if len(self.groupby_exprs) == 0: # special handling when there is no GROUP BY; automatically start the group
+            cur_groupby_vals = ()
+            aggr_states = [eval(exec, None) for exec in self.compiled.aggr_init_execs]
+        for row in self.input.execute():
+            groupby_vals = tuple(eval(exec, None, dict(row0 = row))
+                                 for exec in self.compiled.groupby_execs)
+            aggr_inputs = tuple(eval(exec, None, dict(row0 = row))
+                                for exec in self.compiled.aggr_input_execs)
+            if groupby_vals != cur_groupby_vals:
+                if cur_groupby_vals is not None:
+                    # end the last group and finalize the results
+                    final_aggr_vals = self._finalize_group(sort_buffers, aggr_states)
+                    yield (*cur_groupby_vals, *final_aggr_vals)
+                # start new group:
+                cur_groupby_vals = groupby_vals
+                aggr_states = [eval(exec, None) for exec in self.compiled.aggr_init_execs]
+            for i, (buffer, exec, aggr_input) in enumerate(zip(sort_buffers, self.compiled.aggr_add_execs, aggr_inputs)):
+                if buffer is None: # incrementally computable; just update state
+                    aggr_states[i] = eval(exec, None, dict(state = aggr_states[i], new_val = aggr_input))
+                else: # not incrementally computable; just add to sort buffer
+                    row = aggr_input if isinstance(aggr_input, tuple) else (aggr_input, )
+                    buffer.add(row)
+        if cur_groupby_vals is not None:
+            # end the last group and finalize the results:
+            final_aggr_vals = self._finalize_group(sort_buffers, aggr_states)
+            yield (*cur_groupby_vals, *final_aggr_vals)
         return

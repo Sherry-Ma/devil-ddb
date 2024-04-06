@@ -48,11 +48,11 @@ class MaterializePop(QPop[QPop.CompiledProps]):
         stats = self.context.zm.selection_stats(self.input.estimated.stats, None)
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = stats.block_count(),
                 self_writes = 0,
                 overall = stats.block_count()),
-            blocks_extra_init = QPop.EstimatedProps.StatsInBlocks(
+            blocks_extra_init = QPop.StatsInBlocks(
                 self_reads = 0,
                 self_writes = stats.block_count(),
                 overall = self.input.estimated.blocks.overall)) # note that subtree is paid as extra init cost

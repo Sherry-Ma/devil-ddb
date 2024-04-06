@@ -206,7 +206,7 @@ class MergeEqJoinPop(JoinPop['MergeEqJoinPop.CompiledProps']):
         extra_ios = max(joining_blocks_per_left_row - 1, 0) * joining_per_left_row
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = extra_ios,
                 self_writes = extra_ios,
                 overall = self.left.estimated.blocks.overall + self.right.estimated.blocks.overall + 2*extra_ios))

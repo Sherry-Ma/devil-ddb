@@ -72,16 +72,16 @@ class SUM(ArithOpValExpr, AggrValExpr):
     arity_max = 1
 
     def code_str_init(self) -> str:
-        raise NotImplementedError
+        return '0' if self.valtype() == ValType.INTEGER else '0.0'
 
     def code_str_add(self, state: str, child_code_str: str) -> str:
-        raise NotImplementedError
+        return f'({state})+({child_code_str})'
 
     def code_str_merge(self, state1: str, state2: str) -> str:
-        raise NotImplementedError
+        return f'({state1})+({state2})'
 
     def code_str_finalize(self, state: str) -> str:
-        raise NotImplementedError
+        return f'{state}'
 
 class COUNT(AggrValExpr):
     name = 'COUNT'
@@ -92,16 +92,16 @@ class COUNT(AggrValExpr):
         return ValType.INTEGER, self.children()[0].valtype()
 
     def code_str_init(self) -> str:
-        raise NotImplementedError
+        return '0'
 
     def code_str_add(self, state: str, child_code_str: str) -> str:
-        raise NotImplementedError
+        return f'({state})+1'
 
     def code_str_merge(self, state1: str, state2: str) -> str:
-        raise NotImplementedError
+        return f'({state1})+({state2})'
 
     def code_str_finalize(self, state: str) -> str:
-        raise NotImplementedError
+        return f'{state}'
 
 class AVG(AggrValExpr):
     name = 'AVG'
@@ -138,16 +138,17 @@ class STDDEV_POP(AggrValExpr):
         return ValType.FLOAT, child_type
 
     def code_str_init(self) -> str:
-        raise NotImplementedError
+        # sum of squares, sum of values, count:
+        return '(0.0, 0.0, 0)'
 
     def code_str_add(self, state: str, child_code_str: str) -> str:
-        raise NotImplementedError
+        return f'(({state})[0] + ({child_code_str})*({child_code_str}), ({state})[1] + ({child_code_str}), ({state})[2] + 1)'
 
     def code_str_merge(self, state1: str, state2: str) -> str:
-        raise NotImplementedError
+        return f'(({state1})[0] + ({state2})[0], ({state1})[1] + ({state2})[1], ({state1})[2] + ({state2})[2])'
 
     def code_str_finalize(self, state: str) -> str:
-        raise NotImplementedError
+        return f'None if ({state})[2] == 0 else sqrt(({state})[0] / float(({state})[2]) - (({state})[1] / float(({state})[2])) * (({state})[1] / float(({state})[2])))'
 
 class MIN(AggrValExpr):
     name = 'MIN'
@@ -162,16 +163,16 @@ class MIN(AggrValExpr):
         return True # even if DISTINCT
 
     def code_str_init(self) -> str:
-        raise NotImplementedError
+        return 'None'
     
     def code_str_add(self, state: str, child_code_str: str) -> str:
-        raise NotImplementedError
+        return f'{child_code_str} if {state} is None else min({state},{child_code_str})'
 
     def code_str_merge(self, state1: str, state2: str) -> str:
-        raise NotImplementedError
+        return f'{state2} if {state1} is None else ({state1} if {state2} is None else min({state1},{state2}))'
 
     def code_str_finalize(self, state: str) -> str:
-        raise NotImplementedError
+        return f'{state}'
 
 class MAX(AggrValExpr):
     name = 'MAX'
@@ -186,13 +187,13 @@ class MAX(AggrValExpr):
         return True # even if DISTINCT
 
     def code_str_init(self) -> str:
-        raise NotImplementedError
+        return 'None'
     
     def code_str_add(self, state: str, child_code_str: str) -> str:
-        raise NotImplementedError
+        return f'{child_code_str} if {state} is None else max({state},{child_code_str})'
 
     def code_str_merge(self, state1: str, state2: str) -> str:
-        raise NotImplementedError
+        return f'{state2} if {state1} is None else ({state1} if {state2} is None else max({state1},{state2}))'
 
     def code_str_finalize(self, state: str) -> str:
-        raise NotImplementedError
+        return f'{state}'

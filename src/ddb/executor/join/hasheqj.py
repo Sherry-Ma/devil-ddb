@@ -142,7 +142,7 @@ class HashEqJoinPop(JoinPop['HashEqJoinPop.CompiledProps']):
         writes = (left_blocks + right_blocks) * estimated_passes
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = reads,
                 self_writes = writes,
                 overall = self.left.estimated.blocks.overall + self.right.estimated.blocks.overall +\

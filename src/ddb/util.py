@@ -1,6 +1,28 @@
 from abc import ABCMeta
 from dataclasses import dataclass, fields
-from typing import Iterable
+from typing import Iterable, TypeVar, Generic, cast
+
+
+T = TypeVar('T', int, float)
+"""Type variable for the generic class :class:`.MinMaxSum`.
+"""
+
+@dataclass
+class MinMaxSum(Generic[T]):
+    """A helper class for tracking mininum, maximum, and sum of a collection of values.
+    Type variable ``T`` specifies the type of the values.
+    """
+    min: T | None = None
+    max: T | None = None
+    sum: T = cast(T, 0)
+
+    def add(self, other: T) -> None:
+        """Add a value to the collection.
+        """
+        self.min = other if self.min is None else min(self.min, other)
+        self.max = other if self.max is None else max(self.max, other)
+        self.sum += other
+        return
 
 class CustomInitMeta(ABCMeta):
     """A helper metaclass intended for abstract base classes that will automatically

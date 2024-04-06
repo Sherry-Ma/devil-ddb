@@ -80,7 +80,7 @@ class CreateIndexPop(CPop):
                             DEFAULT_SORT_BUFFER_SIZE, DEFAULT_SORT_BUFFER_SIZE)
         count = 0
         with self.context.mm.index_storage(self.context.tx, self.metadata, self.column_index, create_if_not_exists=True) as f:
-            for val, row_id in scan.execute():
+            for row_id, val in scan.execute():
                 f.put(val, (row_id, ))
                 count += 1
         return f'CREATE INDEX {count}'

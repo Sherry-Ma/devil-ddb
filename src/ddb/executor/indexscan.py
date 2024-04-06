@@ -108,11 +108,10 @@ class IndexScanPop(QPop[QPop.CompiledProps]):
                 output_column_types.insert(insert_i, column_type)
                 output_lineage.insert(insert_i, set(((self.alias, column_name), )))
         else: # secondary index scan
-            output_column_names = [ self.key_name,
-                                    INTERNAL_ROW_ID_COLUMN_NAME ]
+            output_column_names = [ self.key_name, self.meta.id_name() ]
             output_column_types = [ self.meta.column_types[self.meta.column_names.index(self.key_name)],
-                                    INTERNAL_ROW_ID_COLUMN_TYPE ]
-            output_lineage = [set(((self.alias, self.key_name), )), set(((self.alias, INTERNAL_ROW_ID_COLUMN_NAME), ))]
+                                    self.meta.id_type() ]
+            output_lineage = [set(((self.alias, self.key_name), )), set(((self.alias, self.meta.id_name()), ))]
             ordered_columns = [0]
             ordered_asc = [True]
             unique_columns = {1} # while key may not be unique, the internal row id is
@@ -146,7 +145,7 @@ class IndexScanPop(QPop[QPop.CompiledProps]):
             self_reads += index_stats.tree_height - 1
         return QPop.EstimatedProps(
             stats = new_stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = self_reads,
                 self_writes = 0,
                 overall = self_reads))

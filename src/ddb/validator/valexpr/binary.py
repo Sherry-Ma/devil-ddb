@@ -70,9 +70,14 @@ class CONCAT(UniTypeOpValExpr, BinaryOpValExpr):
     uni_type = ValType.VARCHAR
     op = '+'
 
-class REGEXPLIKE(UniTypeOpValExpr, BinaryOpValExpr):
-    uni_type = ValType.VARCHAR
+class REGEXPLIKE(BinaryOpValExpr):
     op = '~'
+
+    def _validate_valtype(self) -> tuple[ValType, ...]:
+        for i, child_type in enumerate(child.valtype() for child in self.children()):
+            if child_type != ValType.VARCHAR:
+                raise ValidatorException(f'{i}-th operand of {type(self).__name__} is not {ValType.VARCHAR.name})')
+        return ValType.BOOLEAN, *([ValType.VARCHAR] * len(self.children()))
 
     def _code_str(self, children_code_str: tuple[str, ...]) -> str:
         left_code, right_code = children_code_str

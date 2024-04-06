@@ -125,7 +125,7 @@ class IndexNLJoinPop(JoinPop['IndexNLJoinPop.CompiledProps']):
                 valexpr.relativize(self.cond, [self.left.compiled.output_lineage, self.right.compiled.output_lineage]))
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = 0,
                 self_writes = 0,
                 overall = self.left.estimated.blocks.overall +\

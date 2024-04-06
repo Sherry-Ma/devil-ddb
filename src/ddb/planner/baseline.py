@@ -1,7 +1,6 @@
 from typing import cast, Final
 
 from ..globals import DEFAULT_SORT_BUFFER_SIZE, DEFAULT_SORT_LAST_BUFFER_SIZE, DEFAULT_BNLJ_BUFFER_SIZE, DEFAULT_HASH_BUFFER_SIZE
-from ..metadata import BaseTableMetadata, INTERNAL_ROW_ID_COLUMN_NAME, INTERNAL_ROW_ID_COLUMN_TYPE
 from ..validator import valexpr, ValExpr, SFWGHLop, BaseTableLop
 from ..executor import StatementContext, QPop, TableScanPop, BNLJoinPop, FilterPop, ProjectPop, IndexScanPop, IndexNLJoinPop, MergeEqJoinPop, MergeSortPop, HashEqJoinPop
 
@@ -11,10 +10,10 @@ from .util import add_groupby_by_sorting, add_having_and_select
 class BaselinePlanner(Planner):
     @classmethod
     def eqj_cond(cls, outer_table_aliases: list[str],
-                 inner_table_alias: str, inner_table_metadata: BaseTableMetadata,
+                 inner_table_alias: str, inner_table: BaseTableLop,
                  cond: ValExpr) \
         -> tuple[list[ValExpr], list[ValExpr], ValExpr | None] | None:
-        """Consider a base table with alias ``inner_table_alias`` and metadata ``inner_table_metadata``,
+        """Consider an inner base table with alias ``inner_table_alias``,
         which is joined with a collection of outer tables with ``outer_table_aliases``,
         or is by itself (if ``outer_table_aliases`` is empty).
         Given condition ``cond``, find a good equality join condition with the base table.
@@ -77,10 +76,10 @@ class BaselinePlanner(Planner):
 
     @classmethod
     def add_smjoin(cls, context: StatementContext, left: QPop,
-                   alias: str, meta: BaseTableMetadata,
+                   alias: str, table: BaseTableLop,
                    left_exprs: list[ValExpr], right_exprs: list[ValExpr],
                    cond_remainder: ValExpr | None) -> QPop:
-        pop: QPop[QPop.CompiledProps] = TableScanPop(context, alias, meta)
+        pop: QPop[QPop.CompiledProps] = TableScanPop(context, alias, table.base_metadata, table.return_row_id)
         orders_asc_required: list[bool | None] = [None] * len(left_exprs)
         orders_asc: list[bool] | None
         # some optimizations to pick preferred sorting order:
@@ -88,8 +87,8 @@ class BaselinePlanner(Planner):
             orders_asc_required = list(orders_asc)
         elif (orders_asc := pop.compiled.is_ordered(right_exprs, orders_asc_required)) is not None:
             orders_asc_required = list(orders_asc)
-        elif meta.primary_key_column_index is not None and \
-            (pki := valexpr.find_column_in_exprs(alias, meta.column_names[meta.primary_key_column_index], right_exprs)) is not None:
+        elif table.base_metadata.primary_key_column_index is not None and \
+            (pki := valexpr.find_column_in_exprs(alias, table.base_metadata.id_name(), right_exprs)) is not None:
             # table is already sorted by primary key, and it's involved in join, so make this the most sigificant order
             left_exprs.insert(0, left_exprs.pop(pki))
             right_exprs.insert(0, right_exprs.pop(pki))
@@ -104,10 +103,10 @@ class BaselinePlanner(Planner):
     
     @classmethod
     def add_hashjoin(cls, context: StatementContext, left: QPop, 
-                     alias: str, meta: BaseTableMetadata, 
+                     alias: str, table: BaseTableLop,
                      left_exprs: list[ValExpr], right_exprs: list[ValExpr], 
                      cond_remainder: ValExpr | None) -> QPop:
-        pop: QPop[QPop.CompiledProps] = TableScanPop(context, alias, meta)
+        pop: QPop[QPop.CompiledProps] = TableScanPop(context, alias, table.base_metadata, table.return_row_id)
         pop = HashEqJoinPop(left, pop, left_exprs, right_exprs, DEFAULT_HASH_BUFFER_SIZE)
         if cond_remainder is not None:
             pop = FilterPop(pop, cond_remainder)
@@ -141,8 +140,8 @@ class BaselinePlanner(Planner):
                 sarg.key_lower, sarg.key_upper = bound, bound
                 sarg.lower_exclusive, sarg.upper_exclusive = False, False
                 covered_candidates = [cond]
-            elif ((isinstance(cond, valexpr.binary.GE) or isinstance(cond, valexpr.binary.GT)) and bound == cond.right) \
-              or (bound == cond.left and (isinstance(cond, valexpr.binary.LE) or isinstance(cond, valexpr.binary.LT))):
+            elif ((isinstance(cond, valexpr.binary.GE) or isinstance(cond, valexpr.binary.GT)) and bound == cond.right()) \
+              or (bound == cond.left() and (isinstance(cond, valexpr.binary.LE) or isinstance(cond, valexpr.binary.LT))):
                 # we have a lower bound
                 if sarg.key_lower is not None:
                     # there was a bound already; just use this old one and skip this
@@ -151,8 +150,8 @@ class BaselinePlanner(Planner):
                 sarg.key_lower = bound
                 sarg.lower_exclusive = isinstance(cond, valexpr.binary.GT) or isinstance(cond, valexpr.binary.LT)
                 covered_candidates.append(cond)
-            elif ((isinstance(cond, valexpr.binary.LE) or isinstance(cond, valexpr.binary.LT)) and bound == cond.right) \
-              or (bound == cond.left and (isinstance(cond, valexpr.binary.GE) or isinstance(cond, valexpr.binary.GT))):
+            elif ((isinstance(cond, valexpr.binary.LE) or isinstance(cond, valexpr.binary.LT)) and bound == cond.right()) \
+              or (bound == cond.left() and (isinstance(cond, valexpr.binary.GE) or isinstance(cond, valexpr.binary.GT))):
                 # we have an upper bound
                 if sarg.key_upper is not None:
                     # there was a bound already; just use this old one and skip this
@@ -165,7 +164,7 @@ class BaselinePlanner(Planner):
 
     @classmethod
     def sarg_cond(cls, outer_table_aliases: list[str],
-                  inner_table_alias: str, inner_table_metadata: BaseTableMetadata,
+                  inner_table_alias: str, inner_table: BaseTableLop,
                   cond: ValExpr) \
         -> tuple[int, QPop.Sarg, ValExpr | None] | None:
         """Consider a base table with alias ``inner_table_alias`` and metadata ``inner_table_metadata``,
@@ -184,10 +183,10 @@ class BaselinePlanner(Planner):
         """
         # first, let's see what indexes we have on inner:
         indexed_column_names = list()
-        if inner_table_metadata.primary_key_column_index is not None:
-            indexed_column_names.append(inner_table_metadata.column_names[inner_table_metadata.primary_key_column_index])
-        for i in inner_table_metadata.secondary_column_indices:
-            indexed_column_names.append(inner_table_metadata.column_names[i])
+        if inner_table.base_metadata.primary_key_column_index is not None:
+            indexed_column_names.append(inner_table.base_metadata.id_name())
+        for i in inner_table.base_metadata.secondary_column_indices:
+            indexed_column_names.append(inner_table.base_metadata.column_names[i])
         # analyze each part and attach candidate parts to indexed columns:
         parts = list(valexpr.conjunctive_parts(cond))
         candidates_map: dict[str, list[valexpr.binary.CompareOpValExpr]] = dict()
@@ -222,40 +221,28 @@ class BaselinePlanner(Planner):
             elif best_sarg.is_range and not sarg.is_range:
                 replace = True
             elif best_sarg.is_range == sarg.is_range and \
-                column_name == inner_table_metadata.column_names[inner_table_metadata.primary_key_column_index]:
+                column_name == inner_table.base_metadata.id_name():
                 replace = True
             if replace:
                 best_column_name, best_sarg, best_covered_parts = column_name, sarg, covered_parts
         if best_column_name is None or best_sarg is None or best_covered_parts is None:
             return None
         else:
-            best_column_index = inner_table_metadata.column_names.index(best_column_name)
+            best_column_index = inner_table.base_metadata.column_names.index(best_column_name)
             remaining_parts = [part for part in parts if part not in best_covered_parts]
             return best_column_index, best_sarg, \
                 (cond if len(best_covered_parts) == 0 else valexpr.make_conjunction(remaining_parts))
 
     @classmethod
     def join_with_base(cls, context: StatementContext, pop: QPop,
-                       alias: str, meta: BaseTableMetadata,
+                       alias: str, table: BaseTableLop,
                        cond: ValExpr | None) -> QPop:
-        """Given a ``Pop`` producing the primary key or row id column for table with ``alias`` and ``meta``,
+        """Given a ``Pop`` producing the primary key or row id column for table with ``alias``,
         return a new plan that retrieves the rest of the columns for ``alias`` using an index nested-loop join with the base table.
         Additionally apply ``cond``.
         """
-        if meta.primary_key_column_index is None:
-            # look in a heap file for a specific row id:
-            pop_base = IndexScanPop(context, alias, meta, INTERNAL_ROW_ID_COLUMN_NAME, is_range=False)
-            key = valexpr.leaf.NamedColumnRef(alias, INTERNAL_ROW_ID_COLUMN_NAME, INTERNAL_ROW_ID_COLUMN_TYPE)
-        else:
-            # look in a primary key B+tree index for a specific key value: 
-            pop_base = IndexScanPop(
-                context, alias, meta,
-                meta.column_names[meta.primary_key_column_index],
-                is_range=False)
-            key = valexpr.leaf.NamedColumnRef(
-                alias,
-                meta.column_names[meta.primary_key_column_index],
-                meta.column_types[meta.primary_key_column_index])
+        pop_base = IndexScanPop(context, alias, table.base_metadata, table.base_metadata.id_name(), is_range=False)
+        key = valexpr.leaf.NamedColumnRef(alias, table.base_metadata.id_name(), table.base_metadata.id_type())
         return IndexNLJoinPop(
             pop, pop_base,
             QPop.Sarg(is_range = False, key_lower = key, key_upper = key, lower_exclusive = False, upper_exclusive = False),
@@ -263,18 +250,18 @@ class BaselinePlanner(Planner):
 
     @classmethod
     def make_independent_index_scan(cls, context: StatementContext,
-                                    alias: str, meta: BaseTableMetadata,
+                                    alias: str, table: BaseTableLop,
                                     column_index: int, sarg: QPop.Sarg, cond_remainder: ValExpr | None) -> QPop:
         pop: QPop = IndexScanPop(
-            context, alias, meta, meta.column_names[column_index],
+            context, alias, table.base_metadata, table.base_metadata.column_names[column_index],
             is_range = cast(bool, sarg.is_range))
         # table all by itself; the sarg should have no column references, so we can evaluate and set at compile-time:
         key_lower = valexpr.eval_literal(sarg.key_lower) if sarg.key_lower is not None else None
         key_upper = valexpr.eval_literal(sarg.key_upper) if sarg.key_upper is not None else None
         cast(IndexScanPop, pop).set_range(key_lower, key_upper, sarg.lower_exclusive, sarg.upper_exclusive)
-        if column_index != meta.primary_key_column_index:
+        if column_index != table.base_metadata.primary_key_column_index:
             # secondary index only, need to get the rest of the row:
-            pop = cls.join_with_base(context, pop, alias, meta, cond_remainder)
+            pop = cls.join_with_base(context, pop, alias, table, cond_remainder)
             cond_remainder = None
         if cond_remainder is not None:
             # apply any remaining condition:
@@ -283,56 +270,56 @@ class BaselinePlanner(Planner):
 
     @classmethod
     def add_dependent_index_scan(cls, context: StatementContext, left: QPop,
-                                 alias: str, meta: BaseTableMetadata,
+                                 alias: str, table: BaseTableLop,
                                  column_index: int, sarg: QPop.Sarg, cond_remainder: ValExpr | None) -> QPop:
         pop: QPop = IndexScanPop(
-            context, alias, meta, meta.column_names[column_index],
+            context, alias, table.base_metadata, table.base_metadata.column_names[column_index],
             is_range = cast(bool, sarg.is_range))
-        if column_index != meta.primary_key_column_index:
+        if column_index != table.base_metadata.primary_key_column_index:
             # inner (right) is a secondary index only:
             pop = IndexNLJoinPop(left, cast(IndexScanPop, pop), sarg, None)
             # still need to join with the base table to get the full row:
-            pop = cls.join_with_base(context, pop, alias, meta, cond_remainder)
+            pop = cls.join_with_base(context, pop, alias, table, cond_remainder)
         else: # inner (right) is a primary index:
             pop = IndexNLJoinPop(left, cast(IndexScanPop, pop), sarg, cond_remainder)
         return pop
 
     @classmethod
     def optimize_one_more_table(cls, context: StatementContext, left: QPop | None, left_aliases: list[str],
-                                alias: str, meta: BaseTableMetadata, cond: ValExpr | None) \
+                                alias: str, table: BaseTableLop, cond: ValExpr | None) \
     -> QPop:
         """Given an existing plan (``left``, containing table aliases ``left_aliases``),
-        one more table (with ``alias`` and ``meta``) to be joined,
+        one more table (with ``alias``) to be joined,
         and a ``cond`` that can be evaluated over all of them,
         return a plan that further incorporates then given table and evaluates the given condition.
         """
         # use an index scan if possible:
         sarg_cond_out = None if cond is None \
-            else cls.sarg_cond(left_aliases, alias, meta, cond)
+            else cls.sarg_cond(left_aliases, alias, table, cond)
         if sarg_cond_out is not None:
             column_index, sarg, cond_remainder = sarg_cond_out
             if left is None:
-                return cls.make_independent_index_scan(context, alias, meta, column_index, sarg, cond_remainder)
+                return cls.make_independent_index_scan(context, alias, table, column_index, sarg, cond_remainder)
             elif Planner.options.index_join:
-                return cls.add_dependent_index_scan(context, left, alias, meta, column_index, sarg, cond_remainder)
+                return cls.add_dependent_index_scan(context, left, alias, table, column_index, sarg, cond_remainder)
         # use sort merge join if possible:
         if Planner.options.sort_merge_join:
             eqj_cond_out = None if cond is None or left is None \
-                else cls.eqj_cond(left_aliases, alias, meta, cond)
+                else cls.eqj_cond(left_aliases, alias, table, cond)
             if eqj_cond_out is not None: # use a sort-merge join
                 left_exprs, right_exprs, cond_remainder = eqj_cond_out
-                pop = cls.add_smjoin(context, cast(QPop, left), alias, meta, left_exprs, right_exprs, cond_remainder)
+                pop = cls.add_smjoin(context, cast(QPop, left), alias, table, left_exprs, right_exprs, cond_remainder)
                 return pop
         # use hash join if possible:
         if Planner.options.hash_join:
             eqj_cond_out = None if cond is None or left is None \
-                else cls.eqj_cond(left_aliases, alias, meta, cond)
+                else cls.eqj_cond(left_aliases, alias, table, cond)
             if eqj_cond_out is not None: # use a hash join
                 left_exprs, right_exprs, cond_remainder = eqj_cond_out
-                pop = cls.add_hashjoin(context, cast(QPop, left), alias, meta, left_exprs, right_exprs, cond_remainder)
+                pop = cls.add_hashjoin(context, cast(QPop, left), alias, table, left_exprs, right_exprs, cond_remainder)
                 return pop
         # fall back: use a table scan
-        pop = TableScanPop(context, alias, meta)
+        pop = TableScanPop(context, alias, table.base_metadata, table.return_row_id)
         if left is None:
             if cond is not None:
                 pop = FilterPop(pop, cond)
@@ -350,7 +337,7 @@ class BaselinePlanner(Planner):
                 raise PlannerException('subqueries in FROM not supported')
             local_cond, cond = valexpr.push_down_conds(cond, outer_table_aliases + [input_alias]) if cond is not None else (None, None)
             plan = cls.optimize_one_more_table(context, plan, outer_table_aliases,
-                                               input_alias, input_table.base_metadata, local_cond)
+                                               input_alias, input_table, local_cond)
             outer_table_aliases.append(input_alias)
         if plan is None:
             raise PlannerException('unexpected error')

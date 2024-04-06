@@ -47,7 +47,7 @@ class LiteralTablePop(QPop[QPop.CompiledProps]):
     def estimated(self) -> QPop.EstimatedProps:
         return QPop.EstimatedProps(
             stats = self.context.zm.literal_table_stats(self.rows),
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = 0,
                 self_writes = 0,
                 overall = 0))

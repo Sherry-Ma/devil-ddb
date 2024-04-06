@@ -52,15 +52,19 @@ class LMDBHeapFile(HeapFile):
 
         def _estimate_blocks(self, num_entries: int) -> int:
             if self._stat['leaf_pages'] == 0 or self._stat['entries'] == 0:
-                self._stat = self.obj.stat()
+                self._stat = self.obj.stat() # force refresh stats
             stat = self._stat
             # use total number of leaves and entries to come up with a guestimate:
             # WARNING: we cannot set LMDB block size, but we can "pretend" leaves use our own block size:
-            leaves = max(1, stat['leaf_pages'] * stat['psize'] / globals.BLOCK_SIZE)
-            entries_per_block = max(1, ceil(float(stat['entries']) / leaves))
+            leaves = ceil(stat['leaf_pages'] * stat['psize'] / globals.BLOCK_SIZE)
+            if leaves == 0:
+                return 0
+            entries_per_block = ceil(float(stat['entries']) / leaves)
+            if entries_per_block == 0: # no entries
+                return 0
             return ceil(float(num_entries) / entries_per_block)
 
-        def finalize(self, result: Any):
+        def finalize(self, result: Any) -> None:
             super().finalize(result)
             if self._method_name in ('iter_scan'):
                 self.num_blocks_read += self._estimate_blocks(self.num_next_calls)
@@ -101,7 +105,7 @@ class LMDBHeapFile(HeapFile):
         with self.lmdb_tx.cursor(db=self.lmdb_handle) as cursor:
             for k, v in cursor:
                 if return_row_id:
-                    yield unpack_int(k), unpack_row(v)
+                    yield unpack_int(k), *(unpack_row(v))
                 else:
                     yield unpack_row(v)
         return
@@ -182,9 +186,9 @@ class LMDBBplusTree(BplusTree):
             self.num_blocks_read += self._stat['depth']
             return
 
-        def _estimate_blocks(self, num_entries: int):
+        def _estimate_blocks(self, num_entries: int) -> int:
             if self._stat['leaf_pages'] == 0 or self._stat['entries'] == 0:
-                self._stat = self.obj.stat()
+                self._stat = self.obj.stat() # force refresh stats
             stat = self._stat
             # use total number of leaves and entries to come up with a guestimate:
             # WARNING: we cannot set LMDB block size, but we can "pretend" leaves use our own block size:
@@ -192,11 +196,13 @@ class LMDBBplusTree(BplusTree):
             if leaves == 0:
                 return 0
             entries_per_block = ceil(float(stat['entries']) / leaves)
+            if entries_per_block == 0: # no entries
+                return 0
             return ceil(float(num_entries) / entries_per_block)
 
-        def finalize(self, result: Any):
+        def finalize(self, result: Any) -> None:
             super().finalize(result)
-            stat: Final = self.obj.stat()
+            # get_one case doesn't need any additional adjustment
             if self._method_name in ('iter_get', 'iter_scan'):
                 self.num_blocks_read += self._estimate_blocks(self.num_next_calls)
                 if self.num_blocks_read > 1:

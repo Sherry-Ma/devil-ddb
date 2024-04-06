@@ -82,7 +82,7 @@ class TableScanPop(QPop[QPop.CompiledProps]):
         block_overall = block_self_reads + block_self_writes
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = block_self_reads,
                 self_writes = block_self_writes,
                 overall = block_overall))

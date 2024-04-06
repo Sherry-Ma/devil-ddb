@@ -1,0 +1,6 @@
+(SET, None)
+(CREATE TABLE, None)
+(INSERT, None)
+(SELECT, 1)
+(0, 328)
+(ROLLBACK, None)

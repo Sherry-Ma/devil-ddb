@@ -61,7 +61,8 @@ def add_having_and_select(
         cast(ValExpr, valexpr.RelativeColumnRef(0, column_index, groupby_expr.valtype()))
         for column_index, groupby_expr in zip(groupby_column_indices, groupby_exprs)
     ]
-    input = AggrPop(input, relativized_groupby_exprs, aggr_exprs, None, DEFAULT_SORT_BUFFER_SIZE)
+    input = AggrPop(input, relativized_groupby_exprs, aggr_exprs, None,
+                    3 * sum(not aggr.is_incremental() for aggr in aggr_exprs))
     computed_exprs = groupby_exprs + aggr_exprs
     no_lineage: OutputLineage = [set()] * len(computed_exprs)
     # next, apply HAVING:

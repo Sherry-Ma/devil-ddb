@@ -1,12 +1,13 @@
 import pytest
 import datetime
+import subprocess
 
 from ddb.db import DatabaseManager
 from ddb.session import Session
 from ddb.parser import parse_all
 
 testcase_dir = "tests/aggr/"
-T = 12 # total number of test cases
+T = 21 # total number of test cases
 
 @pytest.fixture
 def session():
@@ -40,6 +41,7 @@ def load_answer(t_id):
 
 @pytest.mark.parametrize("t_id", list(range(T)))
 def test_session(session, capsys, t_id):
+    subprocess.run(['make', 'clean'], check=True)
     with open(testcase_dir + f"t_aggr_{t_id}.sql") as fsql:
         answer, aggr_answer = load_answer(t_id)
         assert answer is not None and aggr_answer is not None, f"Test{t_id}: faild to load answer file"

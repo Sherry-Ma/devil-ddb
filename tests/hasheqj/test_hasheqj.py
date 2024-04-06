@@ -1,5 +1,6 @@
 import pytest
 import datetime
+import subprocess
 
 from ddb.db import DatabaseManager
 from ddb.session import Session
@@ -40,6 +41,7 @@ def load_anaswer(t_id):
 
 @pytest.mark.parametrize("t_id", list(range(T)))
 def test_session(session, capsys, t_id):
+    subprocess.run(['make', 'clean'], check=True)
     with open(testcase_dir + f"t_hasheqj_{t_id}.sql") as fsql:
         answer, join_answer = load_anaswer(t_id)
         assert answer is not None and join_answer is not None, f"Test{t_id}: faild to load answer file"

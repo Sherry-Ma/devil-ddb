@@ -8,8 +8,9 @@ from .globals import ANSI
 from .util import OptionsBase
 from .parser import parse_all, ParserException
 from .validator import validate, ValidatorException, SetOptionLop, CommitLop, RollbackLop
-from .planner import Planner, NaivePlanner, BaselinePlanner
+from .planner import Planner, NaivePlanner, BaselinePlanner, SmartPlanner
 from .executor import StatementContext, ExecutorException, CPop, QPop
+from .profile import new_profile_context
 if TYPE_CHECKING:
     # this hack and the use of quoted types for forward references below
     # are required to avoid Python circular import nightmare.
@@ -21,6 +22,7 @@ class Response:
     response: str | None = None
     error: str | None = None
     error_details: str | None = None
+    r_pop: QPop | None = None
 
     def pstr(self) -> Iterable[str]:
         if self.response is not None:
@@ -38,7 +40,7 @@ class Session:
         autocommit: bool = field(default=True, metadata={'on': True, 'off': False})
         read_only: bool = field(default=False, metadata={'read only': True, 'read write': False})
         debug: bool = field(default=False, metadata={'on': True, 'off': False})
-        planner: Type[Planner] = field(default=BaselinePlanner, metadata={'baseline': BaselinePlanner, 'naive': NaivePlanner})
+        planner: Type[Planner] = field(default=BaselinePlanner, metadata={'baseline': BaselinePlanner, 'naive': NaivePlanner, 'smart': SmartPlanner})
 
     def __init__(self, dbm: 'DatabaseManager') -> None:
         self.dbm: Final = dbm
@@ -83,7 +85,10 @@ class Session:
         with self.dbm.tm.begin_transaction(parent=self.parent_tx, read_only=self.options.read_only) as tx, \
             self.dbm.tm.begin_transaction(parent=self.parent_tmp_tx, read_only=False, tmp=True) as tmp_tx:
             try:
-                context = StatementContext(sm=self.dbm.sm, mm=self.dbm.mm, zm=self.dbm.zm, tx=tx, tmp_tx=tmp_tx)
+                context = StatementContext(
+                    sm=self.dbm.sm, mm=self.dbm.mm, zm=self.dbm.zm,
+                    tx=tx, tmp_tx=tmp_tx,
+                    profile_context=new_profile_context())
                 # validate: parse tree -> logical plan
                 lop = validate(self.dbm.mm, context.tx, parse_tree)
                 logging.debug('-'*20 + ' LOGICAL PLAN ' + '-'*20)
@@ -125,6 +130,16 @@ class Session:
                         r.response = pop.execute()
                     else:
                         raise ExecutorException(f'unexpected error')
+                    logging.debug('-'*20 + ' POST-MORTEM ANALYSIS ' + '-'*20)
+                    if isinstance(pop, QPop):
+                        r.r_pop = pop
+                        logging.debug(f'total measured running time: {pop.measured.ns_elapsed.sum/1000000}ms')
+                        logging.debug(f'total measured I/Os: {pop.measured.sum_blocks.overall}')
+                        for s in pop.pstr():
+                            logging.debug(s)
+                        # logging.debug('-'*20 + ' DETAILED PROFILE ' + '-'*20)
+                        # for s in context.profile_context.pstr_stats():
+                        #     logging.debug(s)
                 tmp_tx.commit()
                 tx.commit()
                 if self.parent_tx is not None:
@@ -198,9 +213,11 @@ class Session:
                 s = f'{{: >{len(s)}}}'.format(str(line_number) + '> ')
             return s
         import readline
-        print(f'''{ANSI.PROMPT}       Welcome to the      \_|_/(\__/)
+        print(ANSI.PROMPT + r'''
+       Welcome to the      \_|_/(\__/)
       Devil's Database!      |  (. .)/ A
-    Duke CompSci 516 2024   @_   <  /  ){ANSI.END}''')
+    Duke CompSci 516 2024   @_   <  /  )
+'''[1:-1] + ANSI.END)
         lines: list[str] = list()
         try:
             while True:

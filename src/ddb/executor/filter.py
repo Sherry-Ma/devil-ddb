@@ -60,7 +60,7 @@ class FilterPop(QPop['FilterPop.CompiledProps']):
             valexpr.relativize(self.cond, [self.input.compiled.output_lineage]))
         return QPop.EstimatedProps(
             stats = stats,
-            blocks = QPop.EstimatedProps.StatsInBlocks(
+            blocks = QPop.StatsInBlocks(
                 self_reads = 0,
                 self_writes = 0,
                 overall = self.input.estimated.blocks.overall))

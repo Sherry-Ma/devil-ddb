@@ -65,6 +65,8 @@ def generate_special_table(scale: int, num_groups: int=10):
     """
     table = []
     column_types = ['INT','INT','FLOAT','VARCHAR','DATETIME']
+    if scale == 0:
+        return table, column_types
     for i in range(num_groups):
         cnt = random.randint(1, scale // num_groups) if i > 0 else scale // num_groups
         for j in range(cnt):
@@ -90,6 +92,8 @@ def generate_simple_table(scale: int):
     """
     table = []
     column_types = ['INT','INT','INT','FLOAT','VARCHAR','VARCHAR']
+    if scale == 0:
+        return table, column_types
     varchar_domain = [generate_val('VARCHAR',scale) for i in range(5)]
     for i in range(scale):
         row = [i, random.randint(0,10), random.randint(0,10), generate_val('FLOAT',scale), varchar_domain[random.randint(0,4)], generate_val('VARCHAR', scale)]
@@ -329,13 +333,15 @@ def random_test(test_id: int, scale: int, query: str, group_expr_num: int):
         # create R table
         fsql.write("CREATE TABLE R(" + ", ".join([f"{chr(ord('A') + col_i)} {r_column_types[col_i]}" for col_i in range(len(r_column_types))]) + ");\n")
         fans.write("(CREATE TABLE, None)\n")
-        fsql.write("INSERT INTO R VALUES\n" + ",\n".join(['\t(' + ', '.join([str(rtable[row_i][col_i]) for col_i in range(len(r_column_types))]) + ')' for row_i in range(scale)]) + ";\n")
-        fans.write("(INSERT, None)\n")
+        if rtable:
+            fsql.write("INSERT INTO R VALUES\n" + ",\n".join(['\t(' + ', '.join([str(rtable[row_i][col_i]) for col_i in range(len(r_column_types))]) + ')' for row_i in range(scale)]) + ";\n")
+            fans.write("(INSERT, None)\n")
         # create S table
         fsql.write("CREATE TABLE S(" + ", ".join([f"{chr(ord('A') + col_i)} {s_column_types[col_i]}" for col_i in range(len(s_column_types))]) + ");\n")
         fans.write("(CREATE TABLE, None)\n")
-        fsql.write("INSERT INTO S VALUES\n" + ",\n".join(['\t(' + ', '.join([str(stable[row_i][col_i]) for col_i in range(len(s_column_types))]) + ')' for row_i in range(scale)]) + ";\n")
-        fans.write("(INSERT, None)\n")
+        if stable:
+            fsql.write("INSERT INTO S VALUES\n" + ",\n".join(['\t(' + ', '.join([str(stable[row_i][col_i]) for col_i in range(len(s_column_types))]) + ')' for row_i in range(scale)]) + ";\n")
+            fans.write("(INSERT, None)\n")
         # fetch and write answer
         cur = conn.cursor()
         cur.execute(query + f" ORDER BY {', '.join([str(i + 1) for i in range(group_expr_num)])}")
@@ -399,6 +405,7 @@ if __name__ == "__main__":
     # in the same order at the very beginning of SELECT clause (we use this to sort the result)
     random_test(18, 2000, "SELECT R.A, S.B - S.C, AVG(R.C + S.D) FROM R, S WHERE R.A = S.A GROUP BY R.A, S.B - S.C HAVING AVG(R.C + S.D) < 50.0", 2)
     random_test(19, 2000, "SELECT S.A, S.B + S.C, S.E, SUM(S.D * 2), COUNT(DISTINCT S.E) FROM R, S WHERE R.A = S.A AND R.B > S.B GROUP BY S.A, S.B + S.C, S.E HAVING SUM(S.D * 2) > 200 AND COUNT(DISTINCT S.E) = 1", 3)
+    random_test(20, 0, "SELECT R.A, COUNT(1) FROM R, S GROUP BY R.A HAVING COUNT(1) > 1", 1)
 
     # make sure to clean database and close
     cur = conn.cursor()

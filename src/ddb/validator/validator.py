@@ -411,7 +411,7 @@ def validate_delete(mm: MetadataManager, tx: Transaction, parse_tree: exp.Delete
     if base_meta.primary_key_column_index is None:
         key_query.from_tables.clear()
         key_query.from_tables.append(validate_base_table(mm, tx, table_name, return_row_id=True))
-    # second, ensure that we get first get the id (primary key or internal row id), and then all secondary key values in order:
+    # second, ensure that we first get the id (primary key or internal row id), and then all secondary key values in order:
     key_query.select_valexprs.clear()
     key_query.select_aliases.clear()
     key_query.select_valexprs.append(NamedColumnRef(base_meta.name, base_meta.id_name(), base_meta.id_type()))

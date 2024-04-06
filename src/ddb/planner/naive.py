@@ -11,7 +11,7 @@ class NaivePlanner(Planner):
         plan: QPop | None = None
         for input_table, input_alias in zip(block.from_tables, block.from_aliases):
             if isinstance(input_table, BaseTableLop):
-                table_scan = TableScanPop(context, input_alias, input_table.base_metadata)
+                table_scan = TableScanPop(context, input_alias, input_table.base_metadata, input_table.return_row_id)
             else:
                 raise PlannerException('subqueries in FROM not supported')
             if plan is None:
