@@ -1,0 +1,7 @@
+**/*~
+**/__pycache__
+**/.venv
+*.ddb/
+poetry.lock
+docs/build
+docs/source/_modules

@@ -1,0 +1,1 @@
+SELECT * FROM R, S WHERE R.A = S.E;
